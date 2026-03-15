@@ -14,6 +14,7 @@ import { cookies } from "next/headers";
 import { mem0AddTurn, mem0SearchForContext, type Mem0Operation } from "@/app/lib/mem0";
 import { GroqClient } from "@/app/lib/ai/groq/groq-client";
 import { shoppingSearch, type ShoppingProduct } from "@/app/lib/serpapi/shopping";
+import { readConversationMemoryForQuery } from "./memory-read";
 
 function looksLikeRefersToPreviousResults(q: string): boolean {
   const raw = (q || "").trim().toLowerCase();
@@ -203,7 +204,7 @@ export async function extractMemoryFromWindow(
 
   const userText = `ConversationWindow: ${JSON.stringify({ turns: compactTurns })}`;
 
-  const result = await GroqClient.getInstance().generateContent("openai/gpt-oss-120b", userText, {
+  const result = await GroqClient.getInstance().generateContent("openai/gpt-oss-20b", userText, {
     systemInstruction,
   });
 
@@ -296,6 +297,55 @@ export async function performDynamicSearch(
 
   const combinedContext = [...baseContext, ...memContext];
 
+  if (options?.userId) {
+    const lower = trimmed.toLowerCase();
+    const looksLikeMemoryRecall =
+      /\bremember\b/.test(lower) || /\brecall\b/.test(lower) || /\bwhat did i say\b/.test(lower);
+
+    if (looksLikeMemoryRecall) {
+      const memoryAnswer = await readConversationMemoryForQuery(trimmed, options.userId);
+      if (memoryAnswer) {
+        if (options.userId) {
+          mem0Ops.push("add");
+          void mem0AddTurn(
+            [
+              { role: "user", content: trimmed },
+              { role: "assistant", content: memoryAnswer.content },
+            ],
+            { userId: options.userId, sessionId: options.sessionId ?? undefined },
+            { category: "memory", mode: "text" }
+          );
+        }
+
+        return {
+          type: "search",
+          content: memoryAnswer.content,
+          mem0Ops,
+          data: {
+            searchQuery: memoryAnswer.title,
+            overallSummaryLines: [memoryAnswer.summary, ""],
+            summary: memoryAnswer.summary,
+            webItems: [
+              {
+                link: `memory://${memoryAnswer.chatId}`,
+                title: memoryAnswer.title,
+                summaryLines: [memoryAnswer.summary],
+                imageUrl: undefined,
+              },
+            ],
+            mediaItems: [],
+            weatherItems: [],
+            youtubeItems: [],
+            shoppingItems: [],
+            shouldShowTabs: false,
+            mapLocation: undefined,
+            googleMapsKey: undefined,
+          },
+        };
+      }
+    }
+  }
+
   const lastSearchQueryFromContext: string | null =
     typeof conversationContext?.latest_search?.searchQuery === "string"
       ? conversationContext.latest_search.searchQuery
@@ -340,14 +390,24 @@ export async function performDynamicSearch(
     };
   }
 
-  let webQuery = intent.webSearchQuery ?? null;
-  let searchQuery = intent.searchQuery ?? detectQuery;
-  if (shoppingQuery) {
-    searchQuery = shoppingQuery;
-    webQuery = null;
-  }
-  if (!intent.searchQuery && resolvedExplicitSearchQuery) {
+  let webQuery: string | null = null;
+  let searchQuery: string = detectQuery;
+
+  // If the user explicitly said "search ..." or "search for ...",
+  // always use ONLY that extracted phrase as the search query.
+  if (resolvedExplicitSearchQuery && !shoppingQuery && !isAskCloudy) {
     searchQuery = resolvedExplicitSearchQuery;
+    webQuery = resolvedExplicitSearchQuery;
+  } else {
+    webQuery = intent.webSearchQuery ?? null;
+    searchQuery = intent.searchQuery ?? detectQuery;
+    if (shoppingQuery) {
+      searchQuery = shoppingQuery;
+      webQuery = null;
+    }
+    if (!intent.searchQuery && resolvedExplicitSearchQuery) {
+      searchQuery = resolvedExplicitSearchQuery;
+    }
   }
   if (isAskCloudy) {
     const selected = (askCloudyContext && (askCloudyContext as any).selected) || null;

@@ -37,7 +37,7 @@
   --sidebar-border: oklch(0.9400 0 0);
   --sidebar-ring: oklch(0 0 0);
   --font-sans: Geist Mono, ui-monospace, monospace;
-  --font-serif: Geist Mono, ui-monospace, monospace;
+  --font-serif: "Instrument Serif", ui-serif, serif;
   --font-mono: Geist Mono, monospace;
   --radius: 0.5rem;
   --shadow-x: 0px;
@@ -92,7 +92,7 @@
   --sidebar-border: oklch(0.3200 0 0);
   --sidebar-ring: oklch(0.7200 0 0);
   --font-sans: Geist Mono, ui-monospace, monospace;
-  --font-serif: Geist Mono, ui-monospace, monospace;
+  --font-serif: "Instrument Serif", ui-serif, serif;
   --font-mono: Geist Mono, monospace;
   --radius: 0.5rem;
   --shadow-x: 0px;

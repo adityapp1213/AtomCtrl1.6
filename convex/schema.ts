@@ -22,6 +22,17 @@ export default defineSchema({
     createdAt: v.number(),
     searchQuery: v.union(v.string(), v.null()),
     countNo: v.optional(v.number()),
+    isEdit: v.optional(v.boolean()),
+    editContent: v.optional(v.string()),
+    edit: v.optional(
+      v.array(
+        v.object({
+          content: v.string(),
+          responseId: v.id("responses"),
+          createdAt: v.number(),
+        })
+      )
+    ),
   })
     .index("by_user_session", ["userId", "sessionId"])
     .index("by_chat", ["chatId"]),
@@ -32,6 +43,7 @@ export default defineSchema({
     sessionId: v.string(),
     promptId: v.union(v.id("user_prompts"), v.null()),
     responseType: v.string(),
+    reasoning: v.optional(v.string()),
     content: v.string(),
     data: v.union(v.any(), v.null()),
     createdAt: v.number(),
@@ -69,15 +81,4 @@ export default defineSchema({
   })
     .index("by_chat", ["chatId"])
     .index("by_response", ["responseId"]),
-
-  visual_memories: defineTable({
-    chatId: v.id("chats"),
-    userId: v.string(),
-    sessionId: v.string(),
-    title: v.string(),
-    imageData: v.string(),
-    updatedAt: v.number(),
-  })
-    .index("by_chat", ["chatId"])
-    .index("by_user_session", ["userId", "sessionId"]),
 });

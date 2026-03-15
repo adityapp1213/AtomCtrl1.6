@@ -262,7 +262,7 @@ export async function detectIntent(
             searchQuery: {
               type: ["string", "null"],
               description:
-                "Optional refined web search query if search tabs should be shown. Empty string if not needed.",
+                "Optional refined web search query if search tabs should be shown. This MUST be a clean search phrase without helper verbs or instructions. For example, for \"search for dogs\" use just \"dogs\"; for \"look up the best dog food\" use \"best dog food\". Empty string if not needed.",
             },
             youtubeQuery: {
               type: ["string", "null"],
@@ -303,7 +303,7 @@ export async function detectIntent(
             searchQuery: {
               type: ["string", "null"],
               description:
-                "Optional refined web search query if search tabs should be shown. Empty string if not needed.",
+                "Optional refined web search query if search tabs should be shown. This MUST be a clean search phrase without helper verbs or instructions. For example, for \"search for dogs\" use just \"dogs\"; for \"look up the best dog food\" use \"best dog food\". Empty string if not needed.",
             },
             youtubeQuery: {
               type: ["string", "null"],
@@ -381,7 +381,7 @@ export async function detectIntent(
 
     const pre =
       provider === "groq" && hasGroqKey
-        ? await GroqClient.getInstance().generateContent("openai/gpt-oss-120b", safeQuery, {
+        ? await GroqClient.getInstance().generateContent("openai/gpt-oss-20b", safeQuery, {
             tools: toolDeclarations.map(
               (d): GroqTool => ({
                 type: "function",

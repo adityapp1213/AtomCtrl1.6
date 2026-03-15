@@ -37,15 +37,24 @@ import { api } from "../../../convex/_generated/api";
 type HomeSearchInputProps = {
   variant?: "desktop" | "mobile";
   onSubmitOverride?: (value: string, meta?: AIInputSubmitMeta) => void;
+  isStreaming?: boolean;
+  onPauseStreaming?: () => void;
 };
 
 export function HomeSearchInput({
   variant = "desktop",
   onSubmitOverride,
+  isStreaming = false,
+  onPauseStreaming,
 }: HomeSearchInputProps) {
   return (
     <PromptInputProvider>
-      <HomeSearchInputContent variant={variant} onSubmitOverride={onSubmitOverride} />
+      <HomeSearchInputContent
+        variant={variant}
+        onSubmitOverride={onSubmitOverride}
+        isStreaming={isStreaming}
+        onPauseStreaming={onPauseStreaming}
+      />
     </PromptInputProvider>
   );
 }
@@ -53,9 +62,16 @@ export function HomeSearchInput({
 type HomeSearchInputContentProps = {
   variant: "desktop" | "mobile";
   onSubmitOverride?: (value: string, meta?: AIInputSubmitMeta) => void;
+  isStreaming?: boolean;
+  onPauseStreaming?: () => void;
 };
 
-function HomeSearchInputContent({ variant, onSubmitOverride }: HomeSearchInputContentProps) {
+function HomeSearchInputContent({
+  variant,
+  onSubmitOverride,
+  isStreaming = false,
+  onPauseStreaming,
+}: HomeSearchInputContentProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user } = useUser();
@@ -203,37 +219,56 @@ function HomeSearchInputContent({ variant, onSubmitOverride }: HomeSearchInputCo
     setHasRecognition("mediaDevices" in navigator && "MediaRecorder" in window);
   }, []);
 
-  const renderActionButton = () =>
-    input.trim().length === 0 ? (
-      <Button
-        type="button"
-        variant="outline"
-        size="icon-lg"
-        className={cn(
-          "rounded-full transition-colors duration-200",
-          isListening && "bg-accent text-accent-foreground border-transparent"
-        )}
-        onClick={toggleListening}
-        aria-label="Record"
-        disabled={!hasRecognition}
-      >
-        {isListening ? (
+  const renderActionButton = () => {
+    if (isStreaming && onPauseStreaming) {
+      return (
+        <Button
+          type="button"
+          size="icon-lg"
+          className="rounded-full bg-black text-white shadow-sm hover:bg-black/80 transition-transform duration-150 active:scale-95"
+          onClick={onPauseStreaming}
+          aria-label="Pause response"
+        >
           <Pause className="h-4 w-4" />
-        ) : (
-          <Mic className="h-4 w-4" />
-        )}
-      </Button>
-    ) : (
+        </Button>
+      );
+    }
+
+    if (input.trim().length === 0) {
+      return (
+        <Button
+          type="button"
+          variant="outline"
+          size="icon-lg"
+          className={cn(
+            "rounded-full transition-colors duration-200",
+            isListening && "bg-accent text-accent-foreground border-transparent"
+          )}
+          onClick={toggleListening}
+          aria-label="Record"
+          disabled={!hasRecognition}
+        >
+          {isListening ? (
+            <Pause className="h-4 w-4" />
+          ) : (
+            <Mic className="h-4 w-4" />
+          )}
+        </Button>
+      );
+    }
+
+    return (
       <Button
         type="button"
         size="icon-lg"
-        className="rounded-full bg-black text-white shadow-sm hover:bg-black/90"
+        className="rounded-full bg-black text-white shadow-sm hover:bg-black/90 transition-transform duration-150 active:scale-95"
         onClick={handleSubmit}
         aria-label="Go"
       >
         <ArrowUp className="h-4 w-4" />
       </Button>
     );
+  };
 
   const toggleListening = useCallback(() => {
     if (!hasRecognition) return;

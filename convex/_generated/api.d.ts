@@ -9,7 +9,6 @@
  */
 
 import type * as chat from "../chat.js";
-import type * as visualMemory from "../visualMemory.js";
 
 import type {
   ApiFromModules,
@@ -19,7 +18,6 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   chat: typeof chat;
-  visualMemory: typeof visualMemory;
 }>;
 
 /**

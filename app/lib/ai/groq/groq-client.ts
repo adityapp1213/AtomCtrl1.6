@@ -104,6 +104,10 @@ export class GroqClient {
             messages,
             tools: (options.tools as unknown as any) ?? undefined,
             tool_choice: options.tools?.length ? ("auto" as any) : undefined,
+            temperature: 0.5,
+            top_p: 1,
+            max_tokens: 1024,
+            stop: null,
           });
 
           const msg = completion.choices?.[0]?.message;
@@ -175,6 +179,10 @@ export class GroqClient {
             messages,
             tools: (options.tools as unknown as any) ?? undefined,
             tool_choice: options.tools?.length ? ("auto" as any) : undefined,
+            temperature: 0.5,
+            top_p: 1,
+            max_tokens: 1024,
+            stop: null,
             stream: true,
           });
 

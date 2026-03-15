@@ -20,6 +20,9 @@
   },
   "registries": {
     "@tailark": "https://tailark.com/r/{name}.json",
-    "@react-bits": "https://reactbits.dev/r/{name}.json"
+    "@react-bits": "https://reactbits.dev/r/{name}.json",
+    "@motion-primitives": "https://motion-primitives.com/c/{name}.json",
+    "@shadcnblocks": "https://shadcnblocks.com/r/{name}.json",
+    "@shadcnuikit": "https://shadcnuikit.com/r/{name}.json"
   }
 }

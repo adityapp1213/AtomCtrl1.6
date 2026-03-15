@@ -72,7 +72,7 @@ export async function POST(req: Request) {
   let stream: AsyncIterable<string> | null = null;
 
   if (aiProvider === "groq" && hasGroqKey) {
-    stream = GroqClient.getInstance().streamContent("openai/gpt-oss-120b", prompt);
+    stream = GroqClient.getInstance().streamContent("openai/gpt-oss-20b", prompt);
   } else if (hasGeminiKey) {
     stream = streamGemini(prompt);
   }

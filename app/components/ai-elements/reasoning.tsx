@@ -7,7 +7,7 @@ import {
   CollapsibleTrigger,
 } from '@/app/components/ui/collapsible';
 import { cn } from '@/lib/utils';
-import { BrainIcon, ChevronDownIcon } from 'lucide-react';
+import { ChevronDownIcon } from 'lucide-react';
 import type { ComponentProps } from 'react';
 import { createContext, memo, useContext, useEffect, useState } from 'react';
 import { Response } from './response';
@@ -135,12 +135,7 @@ export const ReasoningTrigger = memo(
       >
         {children ?? (
           <>
-            <BrainIcon className="size-4" />
-            {isStreaming || duration === 0 ? (
-              <p>Thinking...</p>
-            ) : (
-              <p>Thought for {duration} seconds</p>
-            )}
+            <p className="text-muted-foreground">Thinking...</p>
             <ChevronDownIcon
               className={cn(
                 'size-4 text-muted-foreground transition-transform',
@@ -164,13 +159,17 @@ export const ReasoningContent = memo(
   ({ className, children, ...props }: ReasoningContentProps) => (
     <CollapsibleContent
       className={cn(
-        'mt-4 text-sm',
+        'mt-4 text-sm text-muted-foreground',
         'data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 text-popover-foreground outline-none data-[state=closed]:animate-out data-[state=open]:animate-in',
         className
       )}
       {...(props as any)}
     >
-      <Response className="grid gap-2">{children}</Response>
+      <div className="pl-4 border-l border-border/60">
+        <Response className="grid gap-2 text-muted-foreground">
+          {children}
+        </Response>
+      </div>
     </CollapsibleContent>
   )
 );

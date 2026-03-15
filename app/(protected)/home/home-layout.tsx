@@ -35,11 +35,16 @@ export function HomeLayout({ message }: HomeLayoutProps) {
 
   if (mode === "mobile") {
     return (
-      <main className="min-h-screen w-full bg-white flex flex-col overflow-hidden">
-        <div className="sticky top-0 z-40">
+      <main className="min-h-screen w-full bg-white flex flex-col overflow-hidden relative">
+        <h1
+          className="pointer-events-none select-none absolute top-6 left-8 text-2xl font-serif italic tracking-tight text-neutral-800"
+        >
+          Ctrl 1.6 Beta
+        </h1>
+        <div className="z-40">
           <AppSidebar />
         </div>
-        <section className="flex-1 flex flex-col h-full min-w-0">
+        <section className="flex-1 flex flex-col h-full min-w-0 pt-16 md:pt-0">
           <div className="flex-1 flex flex-col items-center justify-center pt-6 pb-8">
             <div className="w-full max-w-xl px-4 text-center">
               <TextShimmer
@@ -68,7 +73,12 @@ export function HomeLayout({ message }: HomeLayoutProps) {
       <div className="h-full shrink-0">
         <AppSidebar />
       </div>
-      <section className="flex-1 flex flex-col h-full min-w-0">
+      <section className="relative flex-1 flex flex-col h-full min-w-0 pt-4 md:pt-6">
+        <h1
+          className="pointer-events-none select-none absolute top-4 left-8 text-2xl md:text-3xl font-serif italic tracking-tight text-neutral-800"
+        >
+          Ctrl 1.6 Beta
+        </h1>
         <div className="flex-1 flex flex-col items-center justify-center pt-12">
           <div className="w-full max-w-3xl px-4 text-center">
             <TextShimmer

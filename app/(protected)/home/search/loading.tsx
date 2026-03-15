@@ -41,7 +41,7 @@ export default function Loading() {
               <ConversationContent>
                 {userText && (
                   <Message from="user" className="ml-auto">
-                    <MessageContent className="mt-1 bg-muted rounded-lg px-4 py-2">
+                    <MessageContent className="bg-neutral-100 text-neutral-900 rounded-xl px-4 py-2 shadow-sm text-center">
                       {userText}
                     </MessageContent>
                   </Message>

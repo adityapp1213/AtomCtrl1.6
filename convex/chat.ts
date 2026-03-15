@@ -149,12 +149,13 @@ export const writeResponse = mutation({
     sessionId: v.string(),
     promptId: v.optional(v.id("user_prompts")),
     responseType: v.string(),
+    reasoning: v.optional(v.string()),
     content: v.optional(v.string()),
     data: v.optional(v.any()),
     createdAt: v.number(),
   },
   handler: async (ctx, args) => {
-    const { userId, sessionId, promptId, responseType, content, data, createdAt } = args;
+    const { userId, sessionId, promptId, responseType, reasoning, content, data, createdAt } = args;
 
     const existingChat = await ctx.db
       .query("chats")
@@ -191,6 +192,7 @@ export const writeResponse = mutation({
         sessionId,
         promptId: promptId ?? null,
         responseType,
+        ...(typeof reasoning === "string" ? { reasoning } : {}),
         content: content ?? "",
         data: data ?? null,
         createdAt,
@@ -228,6 +230,50 @@ export const writeResponse = mutation({
     }
 
     return { chatId, responseId };
+  },
+});
+
+export const editPrompt = mutation({
+  args: {
+    promptId: v.id("user_prompts"),
+    newContent: v.string(),
+    isEdit: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const prompt = await ctx.db.get(args.promptId);
+    if (!prompt) {
+      return { ok: false };
+    }
+    await ctx.db.patch(args.promptId, {
+      editContent: args.newContent,
+      ...(typeof args.isEdit === "boolean" ? { isEdit: args.isEdit } : {}),
+    });
+    return { ok: true };
+  },
+});
+
+export const addPromptEdit = mutation({
+  args: {
+    promptId: v.id("user_prompts"),
+    content: v.string(),
+    responseId: v.id("responses"),
+    createdAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const prompt = await ctx.db.get(args.promptId);
+    if (!prompt) {
+      return { ok: false };
+    }
+    const existing = Array.isArray((prompt as any).edit) ? ((prompt as any).edit as any[]) : [];
+    const next = [
+      ...existing,
+      { content: args.content, responseId: args.responseId, createdAt: args.createdAt },
+    ];
+    await ctx.db.patch(args.promptId, {
+      isEdit: true,
+      edit: next,
+    });
+    return { ok: true };
   },
 });
 
@@ -318,5 +364,20 @@ export const deleteChat = mutation({
     await ctx.db.delete(chatId);
 
     return { deleted: true };
+  },
+});
+
+export const updateChatTitle = mutation({
+  args: {
+    chatId: v.id("chats"),
+    title: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const chat = await ctx.db.get(args.chatId);
+    if (!chat) {
+      return { ok: false };
+    }
+    await ctx.db.patch(args.chatId, { title: args.title });
+    return { ok: true };
   },
 });

@@ -19,18 +19,35 @@ import {
 } from "@/components/ai-elements/message";
 import { AtomLogo } from "@/components/logo";
 import {
-  performDynamicSearch,
   extractMemoryFromWindow,
   type MemoryWindowTurn,
   type DynamicSearchResult,
 } from "@/app/actions/search";
+import {
+  planQuerySteps,
+  answerQueryDirect,
+  runAgentPlan,
+  type PlannedStep,
+  type PlanMode,
+} from "@/app/actions/agent-plan";
 import { SearchResultsBlock } from "@/components/search-results-block";
 import { YouTubeVideo } from "@/app/lib/ai/youtube";
-import { ChevronLeft, ChevronRight, Globe, Mic, PlayIcon, Quote, X } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Copy,
+  Edit3,
+  Globe,
+  Mic,
+  PlayIcon,
+  Quote,
+  X,
+} from "lucide-react";
 import { Browser, BrowserTab } from "@/components/ui/browser";
-import { getChatSession, saveChatSession, type PinnedItem } from "@/app/lib/chat-store";
+import { saveChatSession, type PinnedItem } from "@/app/lib/chat-store";
 
 import { MapBlock } from "@/components/map-block";
+import Spinner7 from "@/components/spinner7";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { HomeSearchInput } from "../home-search-input";
@@ -48,6 +65,12 @@ import {
   InlineCitationCarouselPrev,
   InlineCitationSource,
 } from "@/components/ai-elements/inline-citation";
+import {
+  Reasoning,
+  ReasoningTrigger,
+  ReasoningContent,
+} from "@/components/ai-elements/reasoning";
+import { Queue } from "@/components/ai-elements/queue";
 import { isVoiceSource, speakAssistantWithDeepgram } from "@/app/lib/deepgram/voice";
 
 // Ensure this component is imported only on client side or handling it correctly
@@ -67,12 +90,20 @@ type ChatMessage = {
   id: number;
   role: "user" | "assistant";
   content: string;
+  promptId?: string;
+  turnKey?: string;
+  versionIndex?: number;
+  promptVersions?: string[];
+  activeVersionIndex?: number;
   isVoice?: boolean;
   type?: "text" | "search";
   data?: DynamicSearchResult["data"];
   mem0Ops?: import("@/app/lib/mem0").Mem0Operation[];
   askCloudy?: AskCloudyContext | null;
   inputsUsed?: string[];
+  planReasoning?: string | null;
+  planSteps?: PlannedStep[];
+  planMode?: PlanMode;
 };
 
 type SearchConversationShellProps = {
@@ -223,12 +254,15 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
     api.chat.listChatMessages,
     userId && activeSessionId ? { userId, sessionId: activeSessionId } : "skip"
   );
+  const isConvexChatLoading = Boolean(userId && activeSessionId && chatHistory === undefined);
+  const loadedSessionIdRef = useRef<string | null>(null);
   
   // Browser state
   const [browserTabs, setBrowserTabs] = useState<BrowserTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [chatInputValue, setChatInputValue] = useState("");
   const [isChatLoading, setIsChatLoading] = useState(false);
+  const [isChatSwitchLoading, setIsChatSwitchLoading] = useState(false);
   const [isSpeechProcessing, setIsSpeechProcessing] = useState(false);
   const [chatLoadingQuery, setChatLoadingQuery] = useState<string>("");
   const [chatMediaLoaded, setChatMediaLoaded] = useState(0);
@@ -264,9 +298,324 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
   const initialTurnPersistedRef = useRef(false);
   const [shoppingLocation, setShoppingLocation] = useState<string>("");
   const [shoppingLocationLoaded, setShoppingLocationLoaded] = useState(false);
+  const [reasoningMessageId, setReasoningMessageId] = useState<number | null>(null);
+  const [currentPlanMeta, setCurrentPlanMeta] = useState<{
+    steps: PlannedStep[];
+    completedCount: number;
+  } | null>(null);
+  const [editTarget, setEditTarget] = useState<ChatMessage | null>(null);
+  const [editDraft, setEditDraft] = useState("");
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const copiedResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleCopyUserMessage = (msg: ChatMessage) => {
+    if (!msg.content) return;
+    try {
+      navigator.clipboard?.writeText(msg.content);
+      const nextKey = `${String(msg.turnKey ?? msg.id)}:${msg.activeVersionIndex ?? 0}`;
+      setCopiedKey(nextKey);
+      if (copiedResetTimeoutRef.current) {
+        clearTimeout(copiedResetTimeoutRef.current);
+      }
+      copiedResetTimeoutRef.current = setTimeout(() => {
+        setCopiedKey(null);
+      }, 900);
+    } catch {
+      // ignore clipboard failures
+    }
+  };
+
+  const setUserActiveVersion = (turnKey: string, nextIndex: number) => {
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.role !== "user" || m.turnKey !== turnKey) return m;
+        const versions = Array.isArray(m.promptVersions) && m.promptVersions.length > 0 ? m.promptVersions : [m.content];
+        const clamped = Math.max(0, Math.min(nextIndex, versions.length - 1));
+        return {
+          ...m,
+          activeVersionIndex: clamped,
+          content: versions[clamped] ?? m.content,
+        };
+      })
+    );
+  };
+
+  const handleStartEditUserMessage = (msg: ChatMessage) => {
+    setEditTarget(msg);
+    setEditDraft(msg.content);
+  };
+
+  const handleCancelEdit = () => {
+    setEditTarget(null);
+    setEditDraft("");
+  };
+
+  const handleSubmitEdit = async () => {
+    const nextPrompt = (editDraft || "").trim();
+    if (!nextPrompt || !editTarget) {
+      handleCancelEdit();
+      return;
+    }
+
+    const target = editTarget;
+    const turnKey = (target.turnKey || target.promptId || String(target.id)) as string;
+    const basePromptId = target.promptId ? (target.promptId as any as Id<"user_prompts">) : null;
+    const responseMessageId = Date.now() + 1;
+
+    setMessages((prev) => {
+      const idx = prev.findIndex((m) => m.id === target.id && m.role === "user");
+      if (idx < 0) return prev;
+      const current = prev[idx];
+      const existingVersions =
+        Array.isArray(current.promptVersions) && current.promptVersions.length > 0
+          ? current.promptVersions
+          : [current.content];
+      const next = [...prev];
+
+      let inferredVersion = 0;
+      for (let j = idx + 1; j < next.length; j += 1) {
+        const msg = next[j];
+        if (msg.role === "user") break;
+        if (msg.role !== "assistant") continue;
+        const existingIndex =
+          typeof msg.versionIndex === "number" ? msg.versionIndex : null;
+        const effectiveIndex = existingIndex ?? inferredVersion;
+        next[j] = {
+          ...msg,
+          turnKey,
+          versionIndex: effectiveIndex,
+        };
+        inferredVersion = Math.max(inferredVersion, effectiveIndex + 1);
+      }
+
+      const updatedUser: ChatMessage = {
+        ...current,
+        turnKey,
+        promptVersions: [...existingVersions, nextPrompt],
+        activeVersionIndex: existingVersions.length,
+        content: nextPrompt,
+      };
+      const assistantPlaceholder: ChatMessage = {
+        id: responseMessageId,
+        role: "assistant",
+        content: "Thinking!!",
+        type: "text",
+        turnKey,
+        versionIndex: existingVersions.length,
+      };
+      next[idx] = updatedUser;
+      next.splice(idx + 1, 0, assistantPlaceholder);
+      return next;
+    });
+
+    handleCancelEdit();
+
+    setIsChatLoading(true);
+    setChatLoadingQuery(nextPrompt);
+    setActiveInputSource("text");
+
+    try {
+      const contextInputs = [...messages]
+        .filter((m) => {
+          const hasContent =
+            typeof m.content === "string" && m.content.trim().length > 0;
+          const isSearch = m.type === "search" && m.data;
+          return hasContent || isSearch;
+        })
+        .slice(-50)
+        .map((m) => {
+          const prefix = m.role === "user" ? "User" : "Assistant";
+          if (m.type === "search" && m.data) {
+            const summary =
+              m.data.overallSummaryLines?.filter(Boolean).join(" ") ||
+              "Search results";
+            return `${prefix}: (Search for "${m.data.searchQuery}") ${summary.slice(
+              0,
+              500
+            )}`;
+          }
+          const body = (m.content || "").trim().slice(0, 500);
+          return `${prefix}: ${body}`;
+        });
+
+      contextInputs.push(`User: ${nextPrompt.slice(0, 500)}`);
+
+      setReasoningMessageId(responseMessageId);
+      const plan = await planQuerySteps(nextPrompt, contextInputs);
+      const hasNonAnswerTool = plan.steps.some((step) => step.tool !== "answer");
+      const mode: PlanMode =
+        plan.mode === "plan" || hasNonAnswerTool ? "plan" : "answer";
+
+      setCurrentPlanMeta({
+        steps: plan.steps,
+        completedCount: 0,
+      });
+
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === responseMessageId
+            ? {
+                ...m,
+                role: "assistant",
+                content: "",
+                type: "text",
+                planReasoning: plan.reasoning,
+                planSteps: plan.steps,
+                planMode: mode,
+              }
+            : m
+        )
+      );
+
+      if (mode === "answer") {
+        const answer = await answerQueryDirect(nextPrompt, contextInputs);
+        const finalAnswer =
+          (answer || "").trim() ||
+          "I am not able to generate a useful answer right now.";
+
+        setPendingStream({
+          messageId: responseMessageId,
+          type: "text",
+          text: finalAnswer,
+        });
+
+        if (userId && activeSessionId && basePromptId) {
+          const responseArgs = {
+            userId,
+            sessionId: activeSessionId,
+            promptId: basePromptId,
+            responseType: "text" as const,
+            content: finalAnswer,
+            data: { reasoning: plan.reasoning },
+            createdAt: Date.now(),
+          };
+          const saved = await writeResponse(responseArgs).catch(async () => {
+            return await writeResponse(responseArgs);
+          });
+          const savedResponseId = (saved as any)?.responseId;
+          if (savedResponseId) {
+            await addPromptEdit({
+              promptId: basePromptId,
+              content: nextPrompt,
+              responseId: savedResponseId,
+              createdAt: Date.now(),
+            });
+          }
+        }
+      } else {
+        const searchResult = await runAgentPlan(nextPrompt, {
+          context: contextInputs,
+          userId,
+          sessionId: activeSessionId,
+          shoppingLocation,
+          planOverride: plan,
+        });
+        setCurrentPlanMeta((prev) =>
+          prev ? { ...prev, completedCount: prev.steps.length } : prev
+        );
+
+        if (searchResult.type === "search" && searchResult.data) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === responseMessageId
+                ? {
+                    ...m,
+                    role: "assistant",
+                    type: "search",
+                    content: searchResult.content ?? "",
+                    data: searchResult.data,
+                  }
+                : m
+            )
+          );
+
+          if (userId && activeSessionId && basePromptId) {
+            const responseArgs = {
+              userId,
+              sessionId: activeSessionId,
+              promptId: basePromptId,
+              responseType: "search" as const,
+              content: searchResult.content ?? "",
+              data: { ...(searchResult.data as any), reasoning: plan.reasoning },
+              createdAt: Date.now(),
+            };
+            const saved = await writeResponse(responseArgs).catch(async () => {
+              return await writeResponse(responseArgs);
+            });
+            const savedResponseId = (saved as any)?.responseId;
+            if (savedResponseId) {
+              await addPromptEdit({
+                promptId: basePromptId,
+                content: nextPrompt,
+                responseId: savedResponseId,
+                createdAt: Date.now(),
+              });
+            }
+          }
+        } else {
+          const fallbackAnswer =
+            (searchResult.content || "").toString().trim() ||
+            "I am not able to generate a useful answer right now.";
+          setPendingStream({
+            messageId: responseMessageId,
+            type: "text",
+            text: fallbackAnswer,
+          });
+
+          if (userId && activeSessionId && basePromptId) {
+            const responseArgs = {
+              userId,
+              sessionId: activeSessionId,
+              promptId: basePromptId,
+              responseType: "text" as const,
+              content: fallbackAnswer,
+              data: { reasoning: plan.reasoning },
+              createdAt: Date.now(),
+            };
+            const saved = await writeResponse(responseArgs).catch(async () => {
+              return await writeResponse(responseArgs);
+            });
+            const savedResponseId = (saved as any)?.responseId;
+            if (savedResponseId) {
+              await addPromptEdit({
+                promptId: basePromptId,
+                content: nextPrompt,
+                responseId: savedResponseId,
+                createdAt: Date.now(),
+              });
+            }
+          }
+        }
+
+        setCurrentPlanMeta((prev) =>
+          prev ? { ...prev, completedCount: prev.steps.length } : prev
+        );
+      }
+    } catch {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === responseMessageId
+            ? {
+                ...m,
+                role: "assistant",
+                content:
+                  "There was an error processing your request. Please try again.",
+              }
+            : m
+        )
+      );
+    } finally {
+      setReasoningMessageId(null);
+      setIsChatLoading(false);
+      setActiveInputSource(null);
+    }
+  };
+  const [isPlanDetailsOpen, setIsPlanDetailsOpen] = useState(false);
 
   const writePrompt = useMutation(api.chat.writePrompt);
   const writeResponse = useMutation(api.chat.writeResponse);
+  const editPrompt = useMutation(api.chat.editPrompt);
+  const addPromptEdit = useMutation(api.chat.addPromptEdit);
   const [storageError, setStorageError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -331,7 +680,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
 
     const slideItems: {
       key: string;
-      kind: "user" | "web";
+      kind: "user" | "web" | "memory";
       id?: number;
       title: string;
       url?: string;
@@ -349,11 +698,12 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
     });
 
     topWebItems.forEach((item, i) => {
+      const isMemoryLink = typeof item.link === "string" && item.link.startsWith("memory://");
       slideItems.push({
-        key: `web-${i}-${item.link}`,
-        kind: "web",
+        key: `${isMemoryLink ? "memory" : "web"}-${i}-${item.link}`,
+        kind: isMemoryLink ? "memory" : "web",
         title: item.title || item.link || "Source",
-        url: item.link,
+        url: isMemoryLink ? undefined : item.link,
         description: item.summaryLines?.[0],
       });
     });
@@ -434,32 +784,30 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
   useEffect(() => {
     if (chatId) {
       setActiveSessionId(chatId);
-      if (!userId) return;
-      const session = getChatSession(userId, chatId);
-      if (session) {
-        setMessages(session.messages as ChatMessage[]);
-        setBrowserTabs(session.browserTabs);
-        setActiveTabId(session.activeTabId);
-        setPinnedItems(session.pinnedItems ?? []);
-        setConversationMemory(session.conversationMemory ?? []);
-        setMemoryWindowKey(session.memoryWindowKey ?? null);
-        setContentState({
-          searchQuery: session.searchQuery,
-          shouldShowTabs: session.shouldShowTabs,
-          overallSummaryLines: session.overallSummaryLines,
-          summary: session.summary ?? null,
-          webItems: session.webItems,
-          mediaItems: session.mediaItems,
-          isWeatherQuery: session.isWeatherQuery,
-          weatherItems: session.weatherItems,
-          youtubeItems: session.youtubeItems,
-          mapLocation: session.mapLocation,
-          googleMapsKey: session.googleMapsKey,
-          tab: session.tab,
-          pinnedItems: session.pinnedItems ?? [],
-            shoppingItems: Array.isArray((session as any).shoppingItems) ? (session as any).shoppingItems : [],
-        });
-      }
+      setIsChatSwitchLoading(true);
+      loadedSessionIdRef.current = null;
+      setMessages([]);
+      setBrowserTabs([]);
+      setActiveTabId(null);
+      setPinnedItems([]);
+      setConversationMemory([]);
+      setMemoryWindowKey(null);
+      setContentState({
+        searchQuery: props.searchQuery,
+        shouldShowTabs: false,
+        overallSummaryLines: [],
+        summary: null,
+        webItems: [],
+        mediaItems: [],
+        isWeatherQuery: false,
+        weatherItems: [],
+        youtubeItems: [],
+        mapLocation: undefined,
+        googleMapsKey: undefined,
+        tab: props.tab,
+        pinnedItems: [],
+        shoppingItems: [],
+      });
       return;
     }
 
@@ -504,8 +852,9 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
 
   useEffect(() => {
     if (!userId || !activeSessionId) return;
+    if (chatHistory === undefined) return;
     if (!chatHistory) return;
-    if (messages.length > 0) return;
+    if (!isChatSwitchLoading && loadedSessionIdRef.current === activeSessionId) return;
 
     const prompts = Array.isArray(chatHistory.prompts)
       ? chatHistory.prompts
@@ -514,7 +863,12 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
       ? chatHistory.responses
       : [];
 
-    if (!prompts.length && !responses.length) return;
+    if (!prompts.length && !responses.length) {
+      setMessages([]);
+      setIsChatSwitchLoading(false);
+      loadedSessionIdRef.current = activeSessionId;
+      return;
+    }
 
     const promptsById = new Map<string, any>();
     prompts.forEach((p: any) => {
@@ -553,35 +907,69 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
     let nextId = Date.now() - 1000 * (sortedPrompts.length + sortedOrphanResponses.length);
 
     sortedPrompts.forEach((p: any) => {
-      const userContent = (p.content || "").toString();
-      if (userContent) {
-        rebuilt.push({
-          id: nextId++,
-          role: "user",
-          content: userContent,
-          type: "text",
-        });
-      }
+      const basePrompt = (p.content || "").toString();
+      if (!basePrompt) return;
+
+      const editArr = Array.isArray(p.edit) ? p.edit : [];
+      const edits = [...editArr].sort(
+        (a: any, b: any) => Number(a.createdAt ?? 0) - Number(b.createdAt ?? 0)
+      );
+      const promptVersions = [
+        basePrompt,
+        ...edits.map((e: any) => (e?.content || "").toString()).filter(Boolean),
+      ];
+
+      const userMsgId = nextId++;
+      rebuilt.push({
+        id: userMsgId,
+        role: "user",
+        content: basePrompt,
+        type: "text",
+        promptId: p._id,
+        turnKey: p._id,
+        promptVersions,
+        activeVersionIndex: 0,
+      });
 
       const respList = (responsesByPrompt.get(p._id) || []).sort(
         (a, b) => Number(a.createdAt ?? 0) - Number(b.createdAt ?? 0)
       );
 
-      respList.forEach((r) => {
+      const pushAssistant = (r: any, versionIndex: number) => {
         const hasSearchData =
-          r.responseType === "search" &&
-          r.data &&
-          typeof r.data === "object";
+          r.responseType === "search" && r.data && typeof r.data === "object";
         rebuilt.push({
           id: nextId++,
           role: "assistant",
-          content: hasSearchData ? (r.content || "").toString() : (r.content || "").toString(),
+          content: (r.content || "").toString(),
           type: hasSearchData ? "search" : "text",
-          data: hasSearchData
-            ? (r.data as DynamicSearchResult["data"])
-            : undefined,
+          data: hasSearchData ? (r.data as DynamicSearchResult["data"]) : undefined,
+          planReasoning:
+            typeof r?.data?.reasoning === "string"
+              ? r.data.reasoning
+              : typeof r.reasoning === "string"
+                ? r.reasoning
+                : null,
+          turnKey: p._id,
+          versionIndex,
         });
-      });
+      };
+
+      const baseResponse = respList.length > 0 ? respList[0] : null;
+      if (baseResponse) {
+        pushAssistant(baseResponse, 0);
+      }
+
+      for (let i = 0; i < edits.length; i += 1) {
+        const edit = edits[i];
+        const responseId = edit?.responseId;
+        const match = responseId
+          ? respList.find((r: any) => String(r._id) === String(responseId))
+          : null;
+        if (match) {
+          pushAssistant(match, i + 1);
+        }
+      }
     });
 
     sortedOrphanResponses.forEach((r) => {
@@ -603,7 +991,9 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
     if (rebuilt.length > 0) {
       setMessages(rebuilt);
     }
-  }, [chatHistory, userId, activeSessionId, messages.length]);
+    setIsChatSwitchLoading(false);
+    loadedSessionIdRef.current = activeSessionId;
+  }, [chatHistory, userId, activeSessionId, isChatSwitchLoading]);
 
   // Removed Convex loader effect to restore original chat logic
 
@@ -613,8 +1003,12 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
     if (!userId || !activeSessionId) return;
     if (!chatHistory) return;
 
-    const prompts = Array.isArray(chatHistory.prompts) ? chatHistory.prompts : [];
-    const responses = Array.isArray(chatHistory.responses) ? chatHistory.responses : [];
+    const prompts = Array.isArray(chatHistory.prompts)
+      ? chatHistory.prompts
+      : [];
+    const responses = Array.isArray(chatHistory.responses)
+      ? chatHistory.responses
+      : [];
 
     if (prompts.length > 0 || responses.length > 0) {
       initialTurnPersistedRef.current = true;
@@ -622,142 +1016,12 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
     }
 
     if (initialTurnPersistedRef.current) return;
-
-    const hasResultData =
-      shouldShowTabs ||
-      (Array.isArray(webItems) && webItems.length > 0) ||
-      (Array.isArray(mediaItems) && mediaItems.length > 0) ||
-      (Array.isArray(youtubeItems) && youtubeItems.length > 0) ||
-      (Array.isArray(weatherItems) && weatherItems.length > 0) ||
-      Boolean(mapLocation) ||
-      overallSummaryLines.some((l) => (l || "").trim().length > 0);
-
-    const hasSummaryForStore =
-      !shouldShowTabs ||
-      (summary || "").trim().length > 0 ||
-      !(Array.isArray(webItems) && webItems.length > 0);
-
-    if (!hasResultData || !hasSummaryForStore) return;
-
     initialTurnPersistedRef.current = true;
 
-    const createdAt = Date.now();
-    const summaryText =
-      overallSummaryLines.filter(Boolean).join(" ") ||
-      (Array.isArray(youtubeItems) && youtubeItems.length > 0
-        ? `Here are your vids on ${searchQuery}`
-        : "");
-
-    const searchData = {
-      searchQuery,
-      overallSummaryLines,
-      summary,
-      webItems,
-      mediaItems,
-      weatherItems,
-      youtubeItems,
-      shoppingItems,
-      shouldShowTabs,
-      mapLocation,
-      googleMapsKey,
-    };
-
-    setMessages((prev) => {
-      if (prev.length > 0) return prev;
-      const baseId = createdAt;
-      const assistantMessage: ChatMessage =
-        shouldShowTabs ||
-        (Array.isArray(webItems) && webItems.length > 0) ||
-        (Array.isArray(mediaItems) && mediaItems.length > 0) ||
-        (Array.isArray(youtubeItems) && youtubeItems.length > 0) ||
-        (Array.isArray(weatherItems) && weatherItems.length > 0) ||
-        Boolean(mapLocation)
-          ? {
-              id: baseId + 1,
-              role: "assistant",
-              content: summaryText,
-              type: "search",
-              data: searchData,
-            }
-          : {
-              id: baseId + 1,
-              role: "assistant",
-              content: summaryText,
-              type: "text",
-            };
-
-      return [
-        {
-          id: baseId,
-          role: "user",
-          content: q,
-          type: "text",
-        },
-        assistantMessage,
-      ];
+    void handleChatSubmit(q, {
+      source: voiceParam ? "voice" : "text",
     });
-
-    void (async () => {
-      let promptId: Id<"user_prompts"> | null = null;
-      const promptArgs = {
-        userId,
-        sessionId: activeSessionId,
-        promptText: q,
-        source: "text" as const,
-        createdAt,
-        searchQuery: searchQuery || undefined,
-      };
-      try {
-        const res = await writePrompt(promptArgs);
-        promptId = (res as { promptId?: Id<"user_prompts"> }).promptId ?? null;
-      } catch {
-        try {
-          const res = await writePrompt(promptArgs);
-          promptId = (res as { promptId?: Id<"user_prompts"> }).promptId ?? null;
-        } catch (err) {
-          console.error("Failed to save initial prompt", err);
-          setStorageError("Some messages could not be saved. Check your connection.");
-        }
-      }
-
-      const responseArgs = {
-        userId,
-        sessionId: activeSessionId,
-        promptId: promptId ?? undefined,
-        responseType: "search" as const,
-        content: summaryText,
-        data: searchData,
-        createdAt: createdAt + 1,
-      };
-
-      try {
-        await writeResponse(responseArgs);
-      } catch {
-        try {
-          await writeResponse(responseArgs);
-        } catch (err) {
-          console.error("Failed to save initial response", err);
-          setStorageError("Some messages could not be saved. Check your connection.");
-        }
-      }
-    })();
-  }, [
-    userId,
-    activeSessionId,
-    searchQuery,
-    shouldShowTabs,
-    overallSummaryLines,
-    summary,
-    webItems,
-    mediaItems,
-    weatherItems,
-    youtubeItems,
-    mapLocation,
-    googleMapsKey,
-    writePrompt,
-    writeResponse,
-    chatHistory,
-  ]);
+  }, [searchQuery, userId, activeSessionId, chatHistory, voiceParam]);
 
   useEffect(() => {
     if (!userId) return;
@@ -947,16 +1211,38 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
         const text = String(pendingStream.text ?? "");
         const parts = text.split(/(\s+)/);
         let buffer = "";
+        let wordBatchCount = 0;
+        const wordsPerBatch = 6;
+
         for (const part of parts) {
           if (!part) continue;
           if (streamTaskRef.current !== taskId) return;
+
           buffer += part;
-          setMessages((prev) =>
-            prev.map((m) => (m.id === pendingStream.messageId ? { ...m, content: buffer } : m))
-          );
-          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+          if (/\S/.test(part)) {
+            wordBatchCount += 1;
+          }
+
+          const isLastChunk = buffer.length >= text.length;
+
+          if (wordBatchCount >= wordsPerBatch || isLastChunk) {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === pendingStream.messageId ? { ...m, content: buffer } : m
+              )
+            );
+            wordBatchCount = 0;
+            await new Promise<void>((resolve) =>
+              requestAnimationFrame(() => resolve())
+            );
+          }
         }
+
         setPendingStream(null);
+        setCurrentPlanMeta((prev) =>
+          prev ? { ...prev, completedCount: prev.steps.length } : prev
+        );
         return;
       }
 
@@ -1230,6 +1516,27 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
     const trimmed = (value || "").trim();
     if (!trimmed) return;
 
+    let effectiveQuery = trimmed;
+    const lower = trimmed.toLowerCase();
+    const againPhrases = [
+      "do it again",
+      "do that again",
+      "again",
+      "repeat that",
+      "repeat it",
+      "search it again",
+      "search that again",
+    ];
+    if (againPhrases.includes(lower)) {
+      const lastSearch = [...messages].reverse().find(
+        (m) => m.role === "assistant" && m.type === "search" && m.data?.searchQuery
+      );
+      const lastQuery = lastSearch?.data?.searchQuery;
+      if (lastQuery && typeof lastQuery === "string" && lastQuery.trim().length > 0) {
+        effectiveQuery = lastQuery.trim();
+      }
+    }
+
     const askCtx = askCloudyContext;
     if (askCtx) {
       setAskCloudyContext(null);
@@ -1244,7 +1551,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
     void unlockAudio();
     setChatInputValue("");
     setIsChatLoading(true);
-    setChatLoadingQuery(trimmed);
+    setChatLoadingQuery(effectiveQuery);
     setActiveInputSource(source);
 
     setMessages((prev) => [
@@ -1253,6 +1560,9 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
         id: baseId,
         role: "user",
         content: trimmed,
+        turnKey: String(baseId),
+        promptVersions: [trimmed],
+        activeVersionIndex: 0,
         isVoice,
         askCloudy: askCtx ?? null,
       },
@@ -1261,6 +1571,8 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
         role: "assistant",
         content: "Thinking!!",
         type: "text",
+        turnKey: String(baseId),
+        versionIndex: 0,
       },
     ]);
 
@@ -1289,6 +1601,21 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
           promptId = null;
         }
       }
+    }
+
+    if (promptId) {
+      const pid = String(promptId);
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.turnKey === String(baseId)
+            ? {
+                ...m,
+                turnKey: pid,
+                ...(m.role === "user" ? { promptId: pid } : {}),
+              }
+            : m
+        )
+      );
     }
 
     const messagesForContext: ChatMessage[] = (() => {
@@ -1345,18 +1672,28 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
       return `Pinned ${kindLabel}: ${p.title}${summary ? ` - ${summary}` : ""}`;
     });
 
-  const convexHistoryContext = (() => {
+    const convexHistoryContext = (() => {
     const prompts = Array.isArray(chatHistory?.prompts) ? chatHistory?.prompts : [];
     const responses = Array.isArray(chatHistory?.responses) ? chatHistory?.responses : [];
       if (!prompts.length && !responses.length) return [];
       const merged = [
-        ...prompts.map((p) => ({
-          role: "user" as const,
-          type: "text" as const,
-          content: (p.content || "").toString(),
-          data: null as null,
-          createdAt: Number(p.createdAt ?? 0),
-        })),
+        ...prompts.map((p) => {
+          const editArr = Array.isArray((p as any).edit) ? ((p as any).edit as any[]) : [];
+          let latestEdit: any = null;
+          for (const e of editArr) {
+            if (!e || typeof e !== "object") continue;
+            if (!latestEdit || Number(e.createdAt ?? 0) > Number(latestEdit.createdAt ?? 0)) {
+              latestEdit = e;
+            }
+          }
+          return {
+            role: "user" as const,
+            type: "text" as const,
+            content: ((latestEdit?.content ?? (p as any).content) || "").toString(),
+            data: null as null,
+            createdAt: Number((p as any).createdAt ?? 0),
+          };
+        }),
         ...responses.map((r) => {
           const hasSearchData =
             r.responseType === "search" && r.data && typeof r.data === "object";
@@ -1390,7 +1727,8 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
         });
     })();
 
-    const shouldAttachConvexHistory = chatHistory?.chat?.count === 1;
+    const chatTurnCount = chatHistory?.chat?.count ?? 0;
+    const shouldAttachConvexHistory = chatTurnCount >= 1;
     const historySet = new Set(historyContext);
     const mergedHistoryContext = shouldAttachConvexHistory
       ? [
@@ -1615,27 +1953,6 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
         })();
       }
 
-      if (shouldBuildMemoryWindow && memoryTurns.length > 0 && chatId) {
-        void (async () => {
-          try {
-            await fetch("/api/memory/update", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                chatId,
-                userId,
-                sessionId: activeSessionId,
-                turns: memoryTurns.map((t) => ({
-                  role: t.role,
-                  text: t.text,
-                })),
-              }),
-            });
-          } catch (err) {
-            console.error("Failed to update visual memory", err);
-          }
-        })();
-      }
       let baseContext: string[] = [];
       if (structuredContext) {
         baseContext = [`AskCloudyContext: ${structuredContext}`];
@@ -1648,155 +1965,182 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
           baseContext.push(`ConversationContext: ${structuredConversationContext}`);
         }
       }
-      const contextInputs = [...baseContext, `User: ${trimmed.slice(0, 500)}`];
+      const contextInputs = [
+        ...baseContext,
+        `User: ${trimmed.slice(0, 500)}`,
+        effectiveQuery !== trimmed ? `EffectiveQuery: ${effectiveQuery}` : "",
+      ].filter(Boolean);
 
-      const result = await performDynamicSearch(trimmed, {
-        context: contextInputs,
-        userId: userId ?? undefined,
-        sessionId: activeSessionId ?? undefined,
-        shoppingLocation: shoppingLocation || undefined,
+      setReasoningMessageId(responseId);
+
+      const plan = await planQuerySteps(effectiveQuery, contextInputs);
+
+      const hasNonAnswerTool = plan.steps.some(
+        (step) => step.tool !== "answer"
+      );
+      const mode: PlanMode =
+        plan.mode === "plan" || hasNonAnswerTool ? "plan" : "answer";
+
+      setCurrentPlanMeta({
+        steps: plan.steps,
+        completedCount: 0,
       });
-      
-        if (result.type === "search" && result.data) {
-        let assistantText = "";
-        if (result.data.youtubeItems && result.data.youtubeItems.length > 0) {
-          pendingSpeakShouldSpeakRef.current = false;
-          assistantText = `Here are your vids on ${result.data.searchQuery || trimmed}`;
-        } else {
-          pendingSpeakShouldSpeakRef.current = isVoice;
-          assistantText = result.data.overallSummaryLines.filter(Boolean).join(" ");
-        }
-        pendingSpeakTextRef.current = assistantText;
 
-        if (userId && activeSessionId) {
-          const responseCreatedAt = Date.now();
-          const args: {
-            userId: string;
-            sessionId: string;
-            promptId?: Id<"user_prompts">;
-            responseType: "search";
-            content: string;
-            data: DynamicSearchResult["data"];
-            createdAt: number;
-          } = {
-            userId,
-            sessionId: activeSessionId,
-            promptId: promptId ?? undefined,
-            responseType: "search" as const,
-            content: assistantText,
-            data: result.data,
-            createdAt: responseCreatedAt,
-          };
-          void (async () => {
-            try {
-              await writeResponse(args);
-            } catch {
-              try {
-                await writeResponse(args);
-              } catch (err) {
-                console.error("Failed to save response", err);
-                setStorageError("Some messages could not be saved. Check your connection.");
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === responseId
+            ? {
+                ...m,
+                role: "assistant",
+                content: "",
+                type: "text",
+                planReasoning: plan.reasoning,
+                planSteps: plan.steps,
+                planMode: mode,
               }
-            }
-          })();
-        }
+            : m
+        )
+      );
 
-        const nextData = { ...result.data, summary: "" };
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === responseId
-              ? {
-                  id: responseId,
-                  role: "assistant",
-                  content: assistantText,
-                  type: "search",
-                  data: nextData,
-                  mem0Ops: result.mem0Ops,
-                  inputsUsed: contextInputs,
-                }
-              : m
-          )
-        );
-        if (
-          !(result.data.youtubeItems && result.data.youtubeItems.length > 0) &&
-          Array.isArray(result.data.webItems) &&
-          result.data.webItems.length > 0
-        ) {
-          const total = Math.min(
-            3,
-            (result.data.mediaItems ?? [])
-              .map((item) => normalizeExternalUrl(item.src))
-              .filter((src) => Boolean(src)).length
-          );
-          setPendingMediaLoad({ messageId: responseId, total, loaded: 0 });
-          setPendingStream({
-            messageId: responseId,
-            type: "search",
-            searchQuery: result.data.searchQuery,
-            webItems: result.data.webItems.map((it) => ({
-              link: it.link,
-              title: it.title,
-              summaryLines: it.summaryLines,
-            })),
-          });
-          deferChatLoadingRef.current = true;
-        }
-      } else {
-        // Handle text response
-        const text = result.content || "I'm not sure how to respond to that.";
-        pendingSpeakShouldSpeakRef.current = isVoice;
-        pendingSpeakTextRef.current = text;
+      if (mode === "answer") {
+        const answer = await answerQueryDirect(trimmed, contextInputs);
+        const finalAnswer =
+          (answer || "").trim() ||
+          "I am not able to generate a useful answer right now.";
+
+        setPendingStream({
+          messageId: responseId,
+          type: "text",
+          text: finalAnswer,
+        });
 
         if (userId && activeSessionId) {
-          const responseCreatedAt = Date.now();
-          const args: {
-            userId: string;
-            sessionId: string;
-            promptId?: Id<"user_prompts">;
-            responseType: "text";
-            content: string;
-            data: null;
-            createdAt: number;
-          } = {
+          const responseArgs = {
             userId,
             sessionId: activeSessionId,
             promptId: promptId ?? undefined,
             responseType: "text" as const,
-            content: text,
-            data: null,
-            createdAt: responseCreatedAt,
+            content: finalAnswer,
+            data: { reasoning: plan.reasoning },
+            createdAt: Date.now(),
           };
-          void (async () => {
+
+          try {
+            await writeResponse(responseArgs);
+          } catch {
             try {
-              await writeResponse(args);
+              await writeResponse(responseArgs);
+            } catch (err) {
+              console.error("Failed to save response", err);
+              setStorageError(
+                "Some messages could not be saved. Check your connection."
+              );
+            }
+          }
+        }
+
+        pendingSpeakShouldSpeakRef.current = isVoice;
+        pendingSpeakTextRef.current = finalAnswer;
+      } else {
+        const searchResult = await runAgentPlan(effectiveQuery, {
+          context: contextInputs,
+          userId,
+          sessionId: activeSessionId,
+          shoppingLocation,
+          planOverride: plan,
+        });
+        setCurrentPlanMeta((prev) =>
+          prev ? { ...prev, completedCount: prev.steps.length } : prev
+        );
+
+        if (searchResult.type === "search" && searchResult.data) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === responseId
+                ? {
+                    ...m,
+                    role: "assistant",
+                    type: "search",
+                    content: searchResult.content ?? "",
+                    data: searchResult.data,
+                  }
+                : m
+            )
+          );
+
+          if (userId && activeSessionId) {
+            const responseArgs = {
+              userId,
+              sessionId: activeSessionId,
+              promptId: promptId ?? undefined,
+              responseType: "search" as const,
+              content: searchResult.content ?? "",
+              data: { ...(searchResult.data as any), reasoning: plan.reasoning },
+              createdAt: Date.now(),
+            };
+
+            try {
+              await writeResponse(responseArgs);
             } catch {
               try {
-                await writeResponse(args);
+                await writeResponse(responseArgs);
               } catch (err) {
                 console.error("Failed to save response", err);
-                setStorageError("Some messages could not be saved. Check your connection.");
+                setStorageError(
+                  "Some messages could not be saved. Check your connection."
+                );
               }
             }
-          })();
+          }
+        } else {
+          const fallbackAnswer =
+            (searchResult.content || "").toString().trim() ||
+            "I am not able to generate a useful answer right now.";
+
+          setPendingStream({
+            messageId: responseId,
+            type: "text",
+            text: fallbackAnswer,
+          });
+
+          if (userId && activeSessionId) {
+            const responseArgs = {
+              userId,
+              sessionId: activeSessionId,
+              promptId: promptId ?? undefined,
+              responseType: "text" as const,
+              content: fallbackAnswer,
+              data: { reasoning: plan.reasoning },
+              createdAt: Date.now(),
+            };
+
+            try {
+              await writeResponse(responseArgs);
+            } catch {
+              try {
+                await writeResponse(responseArgs);
+              } catch (err) {
+                console.error("Failed to save response", err);
+                setStorageError(
+                  "Some messages could not be saved. Check your connection."
+                );
+              }
+            }
+          }
+
+          pendingSpeakShouldSpeakRef.current = isVoice;
+          pendingSpeakTextRef.current = fallbackAnswer;
         }
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === responseId
-              ? {
-                  id: responseId,
-                  role: "assistant",
-                  content: "",
-                  type: "text",
-                  mem0Ops: result.mem0Ops,
-                  inputsUsed: contextInputs,
-                }
-              : m
-          )
+
+        setCurrentPlanMeta((prev) =>
+          prev ? { ...prev, completedCount: prev.steps.length } : prev
         );
-        setPendingMediaLoad({ messageId: responseId, total: 0, loaded: 0 });
-        setPendingStream({ messageId: responseId, type: "text", text });
-        deferChatLoadingRef.current = true;
       }
+
+      setReasoningMessageId(null);
+      setIsChatLoading(false);
+      setActiveInputSource(null);
+      return;
     } catch (err) {
       deferChatLoadingRef.current = false;
       pendingSpeakShouldSpeakRef.current = false;
@@ -1897,6 +2241,25 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
     });
   }, [chatMediaItemsLimited.length]);
 
+  const isAnswerStreaming =
+    Boolean(pendingStream && pendingStream.type === "text");
+
+  const handlePauseStreaming = useCallback(() => {
+    if (pendingStream) {
+      streamTaskRef.current += 1;
+      setPendingStream(null);
+      messageStreamAbortRef.current?.abort();
+    }
+    summaryStreamAbortRef.current?.abort();
+    setChatSummaryStatus((status) =>
+      status === "loading" ? "ready" : status
+    );
+    pendingSpeakShouldSpeakRef.current = false;
+    pendingSpeakTextRef.current = "";
+    setIsChatLoading(false);
+    setActiveInputSource(null);
+  }, [pendingStream]);
+
   const renderSummaryWithCitations = (text: string) => {
     const normalized = normalizeSummaryText(text || "");
     if (!normalized) return null;
@@ -1925,6 +2288,9 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
   return (
     <div className="flex flex-col h-full w-full" ref={rootRef}>
       <div className="flex-1 min-h-0 flex flex-row bg-background overflow-hidden relative">
+        <h1 className="hidden md:block pointer-events-none select-none absolute top-4 left-8 text-2xl md:text-3xl font-serif italic tracking-tight text-neutral-800">
+          Ctrl 1.6 Beta
+        </h1>
         {askCloudySelection && (
           <button
             type="button"
@@ -1991,24 +2357,22 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
         >
           <div className="flex-1 w-full min-h-0 relative overflow-y-auto overflow-x-hidden">
             <Conversation className="w-full h-full">
-              <ConversationContent className="max-w-5xl mx-auto px-4 pt-4 pb-64 md:pb-28">
-                {messages.length === 0 &&
+              <ConversationContent className="max-w-5xl mx-auto px-4 pt-10 pb-64 md:pb-32">
+                {(isChatSwitchLoading || isConvexChatLoading) && (
+                  <div className="w-full flex justify-center">
+                    <Spinner7 />
+                  </div>
+                )}
+
+                {!isChatSwitchLoading &&
+                  !isConvexChatLoading &&
+                  messages.length === 0 &&
                   (!chatHistory?.chat || (chatHistory.chat.count ?? 0) === 0) && (
                     <>
                       <Message from="user" className="ml-auto">
-                        <div className="flex items-center gap-3 w-full flex-row-reverse">
-                          {user?.imageUrl ? (
-                            <Image
-                              src={user.imageUrl}
-                              alt={user.fullName || "User"}
-                              width={32}
-                              height={32}
-                            className="h-8 w-8 rounded-full shrink-0"
-                            />
-                          ) : (
-                          <div className="h-8 w-8 rounded-full bg-secondary shrink-0" />
-                          )}
+                        <div className="w-full max-w-xl flex flex-row justify-end">
                           <MessageContent
+                            className="bg-neutral-100 text-neutral-900 rounded-xl px-4 py-2 shadow-sm text-center"
                             data-cloudy-kind="conversation"
                             data-cloudy-role="user"
                             data-cloudy-message-id="initial-search"
@@ -2116,20 +2480,44 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                     </>
                   )}
 
-                {messages.length > 0 && (
+                {!isChatSwitchLoading && !isConvexChatLoading && messages.length > 0 && (
                   <div className="mt-6 space-y-4">
-                    {messages.map((msg, index) => (
-                      <Message
-                        key={msg.id}
-                        from={msg.role}
-                        className={cn(msg.role === "user" ? "ml-auto" : "mr-auto")}
-                      >
+                    {messages.map((msg, index) => {
+                      if (msg.role === "assistant" && msg.turnKey) {
+                        const userForTurn = messages.find(
+                          (m) => m.role === "user" && m.turnKey === msg.turnKey
+                        );
+                        const active = userForTurn?.activeVersionIndex ?? 0;
+                        const version = msg.versionIndex ?? 0;
+                        if (active !== version) return null;
+                      }
+
+                      return (
+                        <Message
+                          key={msg.id}
+                          from={msg.role}
+                          className={cn(
+                            msg.role === "user" ? "ml-auto" : "mr-auto"
+                          )}
+                        >
                         {msg.type === "search" && msg.data ? (
                           <div className="flex items-start gap-3 w-full flex-row">
                             <div className="shrink-0">
                               <AtomLogo size={28} className="text-foreground" />
                             </div>
                             <div className="w-full pt-1">
+                              {msg.planReasoning && (
+                                <div className="mb-3">
+                                  <Reasoning
+                                    isStreaming={reasoningMessageId === msg.id}
+                                  >
+                                    <ReasoningTrigger />
+                                    <ReasoningContent>
+                                      {msg.planReasoning}
+                                    </ReasoningContent>
+                                  </Reasoning>
+                                </div>
+                              )}
                               {msg.data.mapLocation && (
                                 <div className="mb-6">
                                   <MessageContent className="mb-2">
@@ -2185,55 +2573,135 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                                   <AtomLogo size={28} className="text-foreground" />
                                 </div>
                                 <div className="w-full pt-1">
-                                  <MessageContent
-                                    className="mt-1"
-                                    data-cloudy-kind="conversation"
-                                    data-cloudy-role={msg.role}
-                                    data-cloudy-message-id={String(msg.id)}
-                                  >
-                                    {msg.content}
-                                  </MessageContent>
+                                  {msg.planReasoning && (
+                                    <div className="mb-3">
+                                      <Reasoning
+                                        isStreaming={reasoningMessageId === msg.id}
+                                      >
+                                        <ReasoningTrigger />
+                                        <ReasoningContent>
+                                          {msg.planReasoning}
+                                        </ReasoningContent>
+                                      </Reasoning>
+                                    </div>
+                                  )}
+                                  {(() => {
+                                    const body = (msg.content || "").trim();
+                                    const reasoning = (msg.planReasoning || "").trim();
+                                    const shouldHide =
+                                      Boolean(reasoning) && body === reasoning;
+                                    if (!body || shouldHide) return null;
+                                    return (
+                                      <MessageContent
+                                        className="mt-1"
+                                        data-cloudy-kind="conversation"
+                                        data-cloudy-role={msg.role}
+                                        data-cloudy-message-id={String(msg.id)}
+                                      >
+                                        {msg.content}
+                                      </MessageContent>
+                                    );
+                                  })()}
                                   {renderCitation(msg, index, "inline")}
                                 </div>
                               </div>
                         ) : (
-                          <div className="flex items-center gap-3 w-full flex-row-reverse">
-                                {user?.imageUrl ? (
-                                  <Image
-                                    src={user.imageUrl}
-                                    alt={user.fullName || "User"}
-                                    width={32}
-                                    height={32}
-                                className="h-8 w-8 rounded-full shrink-0"
-                                  />
-                                ) : (
-                              <div className="h-8 w-8 rounded-full bg-secondary shrink-0" />
-                                )}
-                                <div className="w-full max-w-xl flex flex-col items-end gap-1">
-                                  {msg.askCloudy?.selectedText && (
-                                    <div className="max-w-full">
-                                      <div className="inline-flex items-center gap-2 rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground">
-                                        <span>↩</span>
-                                        <span className="truncate max-w-[220px]">
-                                          {msg.askCloudy.selectedText}
-                                        </span>
-                                      </div>
-                                    </div>
-                                  )}
-                                  <MessageContent
-                                    data-cloudy-kind="conversation"
-                                    data-cloudy-role={msg.role}
-                                    data-cloudy-message-id={String(msg.id)}
-                                  >
-                                    {msg.content}
-                                  </MessageContent>
+                          <div className="w-full max-w-xl flex flex-col items-end gap-1 group">
+                            {msg.askCloudy?.selectedText && (
+                              <div className="max-w-full">
+                                <div className="inline-flex items-center gap-2 rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground">
+                                  <span>↩</span>
+                                  <span className="truncate max-w-[220px]">
+                                    {msg.askCloudy.selectedText}
+                                  </span>
                                 </div>
                               </div>
                             )}
+                            <MessageContent
+                              className="bg-neutral-100 text-neutral-900 rounded-xl px-4 py-2 text-center"
+                              data-cloudy-kind="conversation"
+                              data-cloudy-role={msg.role}
+                              data-cloudy-message-id={String(msg.id)}
+                            >
+                              {msg.content}
+                            </MessageContent>
+                            <div className="mt-1 flex items-center gap-3 text-xs text-neutral-500 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+                              <button
+                                type="button"
+                                className="p-1 rounded-full hover:bg-neutral-200"
+                                aria-label="Copy message"
+                                onClick={() => handleCopyUserMessage(msg)}
+                              >
+                                {copiedKey ===
+                                `${String(msg.turnKey ?? msg.id)}:${msg.activeVersionIndex ?? 0}` ? (
+                                  <Image
+                                    src="/check.png"
+                                    alt="Copied"
+                                    width={16}
+                                    height={16}
+                                    className="w-4 h-4 transition-transform duration-200 scale-100"
+                                  />
+                                ) : (
+                                  <Copy className="w-4 h-4 transition-transform duration-200 scale-100" />
+                                )}
+                              </button>
+                              <button
+                                type="button"
+                                className="p-1 rounded-full hover:bg-neutral-200"
+                                aria-label="Edit message"
+                                onClick={() => handleStartEditUserMessage(msg)}
+                              >
+                                <Edit3 className="w-4 h-4" />
+                              </button>
+                              {Array.isArray(msg.promptVersions) &&
+                                msg.promptVersions.length > 1 &&
+                                msg.turnKey && (
+                                  <div className="flex items-center gap-1">
+                                    <button
+                                      type="button"
+                                      className="px-1 py-0.5 rounded-full hover:bg-neutral-200 disabled:opacity-40"
+                                      aria-label="Previous version"
+                                      disabled={(msg.activeVersionIndex ?? 0) <= 0}
+                                      onClick={() =>
+                                        setUserActiveVersion(
+                                          msg.turnKey as string,
+                                          (msg.activeVersionIndex ?? 0) - 1
+                                        )
+                                      }
+                                    >
+                                      {"<"}
+                                    </button>
+                                    <span className="tabular-nums">
+                                      {(msg.activeVersionIndex ?? 0) + 1}/
+                                      {msg.promptVersions.length}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      className="px-1 py-0.5 rounded-full hover:bg-neutral-200 disabled:opacity-40"
+                                      aria-label="Next version"
+                                      disabled={
+                                        (msg.activeVersionIndex ?? 0) >=
+                                        msg.promptVersions.length - 1
+                                      }
+                                      onClick={() =>
+                                        setUserActiveVersion(
+                                          msg.turnKey as string,
+                                          (msg.activeVersionIndex ?? 0) + 1
+                                        )
+                                      }
+                                    >
+                                      {">"}
+                                    </button>
+                                  </div>
+                                )}
+                            </div>
+                          </div>
+                        )}
                           </>
                         )}
-                      </Message>
-                    ))}
+                        </Message>
+                      );
+                    })}
                     {isChatLoading && shouldShowTabs && (
                       <Message from="assistant" className="mr-auto">
                         <div className="flex items-start gap-3 w-full flex-row">
@@ -2272,10 +2740,104 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
 
       {primaryTab === "chat" && (
         <>
-          {/* Desktop: home-style desktop input (inside layout flow) */}
-          <div className="hidden md:block border-t bg-white/70 backdrop-blur supports-[backdrop-filter]:bg-white/50 px-4 py-4 shrink-0">
-            <div className="w-full max-w-3xl mx-auto">
+          {/* Desktop input (inside layout flow, no extra background bar) */}
+          <div className="hidden md:block px-4 py-4 shrink-0">
+            <div className="w-full max-w-3xl mx-auto space-y-2">
+              {currentPlanMeta && currentPlanMeta.steps.length > 0 && (
+                <div
+                  onMouseLeave={() => setIsPlanDetailsOpen(false)}
+                  onClick={() => {
+                    if (currentPlanMeta.steps.length > 1) {
+                      setIsPlanDetailsOpen((open) => !open);
+                    }
+                  }}
+                  className={cn(
+                    currentPlanMeta.steps.length > 1 && "cursor-pointer"
+                  )}
+                >
+                  {isPlanDetailsOpen && currentPlanMeta.steps.length > 1 ? (
+                    <div className="rounded-2xl border border-border/60 bg-white px-5 py-3 text-xs text-muted-foreground">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="font-medium text-foreground text-sm">
+                          Task progress
+                        </span>
+                        <span className="text-[0.8rem] tabular-nums">
+                          {Math.min(
+                            currentPlanMeta.completedCount,
+                            currentPlanMeta.steps.length
+                          )}
+                          /{currentPlanMeta.steps.length}
+                        </span>
+                      </div>
+                      <div className="space-y-1">
+                        {currentPlanMeta.steps.map((step, idx) => {
+                          const done =
+                            currentPlanMeta.completedCount >= idx + 1;
+                          return (
+                            <div
+                              key={step.id || idx}
+                              className="flex items-start gap-2"
+                            >
+                              <span className="mt-0.5 inline-flex h-4 w-4 items-center justify-center">
+                                <Image
+                                  src={done ? "/check.png" : "/pending.png"}
+                                  alt={done ? "Step complete" : "Step pending"}
+                                  width={14}
+                                  height={14}
+                                />
+                              </span>
+                              <span className="truncate">
+                                {step.description}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl border border-border/60 bg-white/80 px-5 py-3 text-sm text-muted-foreground flex items-center justify-between">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <span className="inline-flex h-5 w-5 items-center justify-center">
+                          <Image
+                            src={
+                              currentPlanMeta.completedCount >=
+                              currentPlanMeta.steps.length
+                                ? "/check.png"
+                                : "/pending.png"
+                            }
+                            alt={
+                              currentPlanMeta.completedCount >=
+                              currentPlanMeta.steps.length
+                                ? "Step complete"
+                                : "Step pending"
+                            }
+                            width={18}
+                            height={18}
+                          />
+                        </span>
+                        <span className="truncate">
+                          {currentPlanMeta.steps[0]?.description ||
+                            "Planning steps"}
+                        </span>
+                      </div>
+                      <div className="ml-3 flex items-center gap-1 text-[0.8rem] tabular-nums">
+                        <span>
+                          {isAnswerStreaming &&
+                          currentPlanMeta.completedCount === 0
+                            ? `./${currentPlanMeta.steps.length}`
+                            : `${Math.min(
+                                currentPlanMeta.completedCount,
+                                currentPlanMeta.steps.length
+                              )}/${currentPlanMeta.steps.length}`}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
               <HomeSearchInput
+                isStreaming={isAnswerStreaming}
+                onPauseStreaming={handlePauseStreaming}
                 onSubmitOverride={(value, meta) => {
                   handleChatSubmit(value, meta);
                 }}
@@ -2285,15 +2847,136 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
 
           {/* Mobile: home-style mobile input, fixed to bottom of viewport */}
           <div className="block md:hidden fixed inset-x-0 bottom-0 border-t bg-white/70 backdrop-blur supports-[backdrop-filter]:bg-white/50 px-4 py-3">
-            <div className="w-full max-w-3xl mx-auto">
+            <div className="w-full max-w-3xl mx-auto space-y-2">
+              {currentPlanMeta && currentPlanMeta.steps.length > 0 && (
+                <div
+                  onMouseLeave={() => setIsPlanDetailsOpen(false)}
+                  onClick={() => {
+                    if (currentPlanMeta.steps.length > 1) {
+                      setIsPlanDetailsOpen((open) => !open);
+                    }
+                  }}
+                  className={cn(
+                    currentPlanMeta.steps.length > 1 && "cursor-pointer"
+                  )}
+                >
+                  {isPlanDetailsOpen && currentPlanMeta.steps.length > 1 ? (
+                    <div className="rounded-2xl border border-border/60 bg-white px-5 py-3 text-xs text-muted-foreground">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="font-medium text-foreground text-sm">
+                          Task progress
+                        </span>
+                        <span className="text-[0.8rem] tabular-nums">
+                          {Math.min(
+                            currentPlanMeta.completedCount,
+                            currentPlanMeta.steps.length
+                          )}
+                          /{currentPlanMeta.steps.length}
+                        </span>
+                      </div>
+                      <div className="space-y-1">
+                        {currentPlanMeta.steps.map((step, idx) => {
+                          const done =
+                            currentPlanMeta.completedCount >= idx + 1;
+                          return (
+                            <div
+                              key={step.id || idx}
+                              className="flex items-start gap-2"
+                            >
+                              <span className="mt-0.5 inline-flex h-4 w-4 items-center justify-center">
+                                <Image
+                                  src={done ? "/check.png" : "/pending.png"}
+                                  alt={done ? "Step complete" : "Step pending"}
+                                  width={14}
+                                  height={14}
+                                />
+                              </span>
+                              <span className="truncate">
+                                {step.description}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl border border-border/60 bg-white/80 px-5 py-3 text-sm text-muted-foreground flex items-center justify-between">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <span className="inline-flex h-5 w-5 items-center justify-center">
+                          <Image
+                            src={
+                              currentPlanMeta.completedCount >=
+                              currentPlanMeta.steps.length
+                                ? "/check.png"
+                                : "/pending.png"
+                            }
+                            alt={
+                              currentPlanMeta.completedCount >=
+                              currentPlanMeta.steps.length
+                                ? "Step complete"
+                                : "Step pending"
+                            }
+                            width={18}
+                            height={18}
+                          />
+                        </span>
+                        <span className="truncate">
+                          {currentPlanMeta.steps[0]?.description ||
+                            "Planning steps"}
+                        </span>
+                      </div>
+                      <div className="ml-3 flex items-center gap-1 text-[0.8rem] tabular-nums">
+                        <span>
+                          {isAnswerStreaming &&
+                          currentPlanMeta.completedCount === 0
+                            ? `./${currentPlanMeta.steps.length}`
+                            : `${Math.min(
+                                currentPlanMeta.completedCount,
+                                currentPlanMeta.steps.length
+                              )}/${currentPlanMeta.steps.length}`}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
               <HomeSearchInput
                 variant="mobile"
+                isStreaming={isAnswerStreaming}
+                onPauseStreaming={handlePauseStreaming}
                 onSubmitOverride={(value, meta) => {
                   handleChatSubmit(value, meta);
                 }}
               />
             </div>
           </div>
+          {editTarget && (
+            <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/20 md:bg-black/30">
+              <div className="w-full md:max-w-2xl mx-auto rounded-3xl bg-neutral-100 p-4 md:p-6">
+                <textarea
+                  className="w-full bg-transparent outline-none resize-none min-h-[120px] text-sm"
+                  value={editDraft}
+                  onChange={(e) => setEditDraft(e.target.value)}
+                />
+                <div className="mt-4 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    className="rounded-full border border-neutral-300 px-4 py-1 text-sm"
+                    onClick={handleCancelEdit}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-full bg-black text-white px-4 py-1 text-sm"
+                    onClick={handleSubmitEdit}
+                  >
+                    Send
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>

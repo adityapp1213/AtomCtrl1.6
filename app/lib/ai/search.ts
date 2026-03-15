@@ -263,7 +263,7 @@ export async function summarizeItems(
 
     const resp =
       provider === "groq" && hasGroqKey
-        ? await GroqClient.getInstance().generateContent("openai/gpt-oss-120b", prompt)
+        ? await GroqClient.getInstance().generateContent("openai/gpt-oss-20b", prompt)
         : await GeminiClient.getInstance().generateContent("gemini-2.5-flash", prompt);
 
     const parsed = extractJson(resp?.text || "");
@@ -283,7 +283,7 @@ export async function summarizeChatAnswerFromWebItems(
   query?: string,
   providerOverride?: "gemini" | "groq"
 ): Promise<string> {
-  const trimmedItems = Array.isArray(items) ? items.slice(0, 3) : [];
+  const trimmedItems = Array.isArray(items) ? items.slice(0, 4) : [];
   if (!trimmedItems.length) return "";
 
   const hasGroqKey = Boolean(process.env.GROQ_API_KEY || process.env.OPEN_AI_API_KEY);
@@ -295,6 +295,10 @@ export async function summarizeChatAnswerFromWebItems(
   }
 
   const trimmedQuery = (query ?? "").toString().trim();
+  const isShortEntityQuery =
+    trimmedQuery.length > 0 &&
+    trimmedQuery.split(/\s+/).length <= 3 &&
+    !/[?.!]/.test(trimmedQuery);
   const sourcePayload = trimmedItems.map((item, idx) => ({
     index: idx + 1,
     title: item.title,
@@ -303,19 +307,30 @@ export async function summarizeChatAnswerFromWebItems(
   }));
 
   try {
-    const prompt =
+    const basePrompt =
       `You are answering the user query: "${trimmedQuery || "N/A"}". ` +
       "Use only the provided sources. Respond in a way that directly satisfies the user's request. " +
-      "If the user asks to list, recommend, or give examples, return a compact list of about 3–5 specific items; " +
-      "otherwise, give a short explanation. Keep the whole answer under ~5 short lines. " +
-      "When you reference a source, include its URL in angle brackets like <https://example.com> " +
-      "or <https://example.com|Label>. Do not use [1]-style numeric citations. " +
-      "Weave the links naturally into the text and do not say that you are citing sources. " +
-      `Sources: ${JSON.stringify(sourcePayload)}`;
+      "Write a relatively rich answer: aim for 2–3 short paragraphs (roughly 6–10 sentences total). ";
+
+    const stylePrompt = isShortEntityQuery
+      ? "Treat this as a request for an encyclopedic-style explanation of the main concept. " +
+        "Focus on what it is, key properties, and how it is usually understood. " +
+        "Avoid centering one-off news stories, legal cases, or narrow edge examples unless the user explicitly asked for them. "
+      : "Adapt the tone and structure to the user's request, but still favor clear, factual explanations over sensational examples. ";
+
+    const linkPrompt =
+      "When you reference a source, use standard Markdown link syntax with a human label, " +
+      'for example [OpenAI](https://www.openai.com) "OpenAI". ' +
+      "Prefer the source title as the label. Do not paste bare URLs. " +
+      "Try to use at least four distinct sources when that many are available. " +
+      "Weave links naturally into sentences instead of listing them separately, and do not use [1]-style numeric citations. ";
+
+    const prompt =
+      basePrompt + stylePrompt + linkPrompt + `Sources: ${JSON.stringify(sourcePayload)}`;
 
     const resp =
       provider === "groq" && hasGroqKey
-        ? await GroqClient.getInstance().generateContent("openai/gpt-oss-120b", prompt)
+        ? await GroqClient.getInstance().generateContent("openai/gpt-oss-20b", prompt)
         : await GeminiClient.getInstance().generateContent("gemini-2.5-flash", prompt);
 
     return (resp?.text || "").trim();
@@ -378,7 +393,7 @@ export async function summarizeChatAnswerFromShoppingItems(
 
     const resp =
       provider === "groq" && hasGroqKey
-        ? await GroqClient.getInstance().generateContent("openai/gpt-oss-120b", prompt)
+        ? await GroqClient.getInstance().generateContent("openai/gpt-oss-20b", prompt)
         : await GeminiClient.getInstance().generateContent("gemini-2.5-flash", prompt);
 
     return (resp?.text || "").trim();

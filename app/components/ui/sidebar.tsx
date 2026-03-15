@@ -62,7 +62,7 @@ export const DesktopSidebar = ({ className, children, ...props }: React.Componen
   return (
     <motion.div
       className={cn(
-        "h-full px-4 py-4 hidden md:flex md:flex-col bg-neutral-100 dark:bg-neutral-800 w-[300px] flex-shrink-0",
+        "h-full px-4 pt-2 pb-4 hidden md:flex md:flex-col bg-neutral-100 dark:bg-neutral-800 w-[300px] flex-shrink-0",
         className
       )}
       animate={{ width: animate ? (open ? "300px" : "60px") : "300px" }}
@@ -79,7 +79,7 @@ export const MobileSidebar = ({ className, children, ...props }: React.Component
     <>
       <div
         className={cn(
-          "px-4 pt-4 pb-2 flex flex-row md:hidden items-center bg-white dark:bg-neutral-900 w-full",
+          "sticky top-0 left-0 right-0 z-40 px-4 pt-4 pb-2 flex flex-row md:hidden items-center bg-white dark:bg-neutral-900 w-full",
           className
         )}
         {...props}
@@ -96,8 +96,8 @@ export const MobileSidebar = ({ className, children, ...props }: React.Component
             title="App"
             size={36}
           />
-          <span className="text-lg font-semibold">
-            atom ctrl
+          <span className="text-2xl font-semibold font-serif italic text-neutral-900 dark:text-neutral-100">
+            Ctrl 1.6 Beta
           </span>
         </button>
       </div>
@@ -121,8 +121,8 @@ export const MobileSidebar = ({ className, children, ...props }: React.Component
                   title="App"
                   size={32}
                 />
-                <span className="text-base font-semibold text-neutral-900 dark:text-neutral-100">
-                  atom ctrl
+                <span className="text-xl font-semibold font-serif italic text-neutral-900 dark:text-neutral-100">
+                  Ctrl 1.6 Beta
                 </span>
               </div>
               <button
@@ -253,35 +253,6 @@ const LocalHistory = () => {
   );
 };
 
-const VisualMemoryPreview = () => {
-  const searchParams = useSearchParams();
-  const chatId = searchParams.get("chatId");
-
-  if (!chatId) return null;
-
-  const src = `/api/memory/image?chatId=${encodeURIComponent(chatId)}`;
-
-  return (
-    <div className="mt-2">
-      <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400 mb-1">
-        Memory
-      </h2>
-      <div className="rounded-md border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900/40 p-2">
-        <div className="aspect-[4/3] w-full overflow-hidden rounded-sm bg-neutral-200 dark:bg-neutral-800 flex items-center justify-center">
-          <img
-            src={src}
-            alt="Conversation memory"
-            className="w-full h-full object-cover"
-            onError={(e) => {
-              e.currentTarget.style.visibility = "hidden";
-            }}
-          />
-        </div>
-      </div>
-    </div>
-  );
-};
-
 const AppSidebarContent = () => {
   const { user } = useUser();
   const { open, setOpen } = useSidebar();
@@ -294,21 +265,30 @@ const AppSidebarContent = () => {
 
   if (!open) {
     return (
-      <div className="flex h-full flex-col items-center justify-between py-2">
+      <div className="flex h-full flex-col items-center">
         <button
           type="button"
-          className="flex h-10 w-10 items-center justify-center rounded-md bg-transparent text-neutral-900 dark:text-neutral-100 outline-none transition hover:bg-neutral-200/70 dark:hover:bg-neutral-700/70 focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-neutral-500"
+          className="mt-0 flex h-11 w-11 items-center justify-center rounded-md bg-transparent text-neutral-900 dark:text-neutral-100 outline-none transition hover:bg-neutral-200/70 dark:hover:bg-neutral-700/70 focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-neutral-500"
           aria-label="Open sidebar"
           onClick={() => setOpen(true)}
         >
           <AtomLogo
-            className="h-6 w-6"
-            ariaLabel="App logo"
-            title="App"
-            size={24}
+            className="h-9 w-9"
+            ariaLabel="Atom Ctrl logo"
+            title="Atom Ctrl"
+            size={33}
           />
         </button>
-        <UserButton />
+        <Link
+          href="/home"
+          aria-label="New chat"
+          className="mt-3 flex h-10 w-10 items-center justify-center rounded-md text-neutral-900 dark:text-neutral-100 hover:bg-neutral-200/80 dark:hover:bg-neutral-700/80 transition-colors"
+        >
+          <SquarePen className="w-4 h-4" />
+        </Link>
+        <div className="mt-auto pb-2">
+          <UserButton />
+        </div>
       </div>
     );
   }
@@ -318,12 +298,12 @@ const AppSidebarContent = () => {
       <div className="hidden md:flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <AtomLogo
-            className="h-8 w-auto text-neutral-900 dark:text-neutral-100"
-            ariaLabel="App logo"
-            title="App"
-            size={32}
+            className="h-9 w-9 text-neutral-900 dark:text-neutral-100"
+            ariaLabel="Atom Ctrl logo"
+            title="Atom Ctrl"
+            size={33}
           />
-          <span className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+          <span className="text-lg font-semibold font-serif italic text-neutral-900 dark:text-neutral-100">
             atom ctrl
           </span>
         </div>
@@ -348,7 +328,6 @@ const AppSidebarContent = () => {
           History
         </h2>
         <LocalHistory />
-        <VisualMemoryPreview />
         {showRequestHistory && <RequestHistory userId={user?.id ?? null} />}
       </div>
       <div className="mt-2 pt-3 border-t border-neutral-200 dark:border-neutral-700 flex items-center gap-3">
