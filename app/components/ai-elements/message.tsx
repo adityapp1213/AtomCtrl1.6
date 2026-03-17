@@ -59,7 +59,7 @@ export const MessageContent = ({
       {...props}
     >
       {isString ? (
-        <Response className="prose prose-sm max-w-none dark:prose-invert">
+        <Response className="max-w-none font-sans text-sm leading-[1.5] text-foreground">
           {children as string}
         </Response>
       ) : (

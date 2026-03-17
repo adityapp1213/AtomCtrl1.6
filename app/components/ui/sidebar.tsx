@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import { AtomLogo } from "@/components/logo";
 import { UserButton, useUser } from "@clerk/nextjs";
 import Link, { LinkProps } from "next/link";
+import Image from "next/image";
 import React, { useState, createContext, useContext } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Menu, X, SquarePen, Trash2 } from "lucide-react";
@@ -90,11 +91,18 @@ export const MobileSidebar = ({ className, children, ...props }: React.Component
           className="flex items-center gap-2 text-neutral-900 dark:text-neutral-100"
           aria-label="Open sidebar"
         >
+          <Image
+            src="/sidebaricon.png"
+            alt="Sidebar"
+            width={26}
+            height={26}
+            className="h-8 w-8"
+          />
           <AtomLogo
-            className="h-9 w-auto text-neutral-900 dark:text-neutral-100"
+            className="h-8 w-auto text-neutral-900 dark:text-neutral-100"
             ariaLabel="App logo"
             title="App"
-            size={36}
+            size={32}
           />
           <span className="text-2xl font-semibold font-serif italic text-neutral-900 dark:text-neutral-100">
             Ctrl 1.6 Beta

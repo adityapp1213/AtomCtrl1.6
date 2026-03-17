@@ -207,7 +207,7 @@ Access Tokens support granular permissions through grants. Both TTS and STT gran
 
 * `/stt/websocket` - WebSocket-based speech-to-text streaming
 * `/stt` - Batch speech-to-text processing
-* `/audio/transcriptions` - OpenAI-compatible transcription endpoint
+* `/audio/transcriptions` - API-compatible transcription endpoint
 
 **Agents Grant**: With `grants: { agent: true }`, clients have access to:
 

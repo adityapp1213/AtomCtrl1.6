@@ -1,5 +1,14 @@
 import { GeminiClient } from "./gemini-client";
 import { GroqClient } from "./groq/groq-client";
+import { DETECT_INTENT_SYSTEM_PROMPT } from "./system-prompts";
+
+const CLOUDY_SUMMARY_SYSTEM_PROMPT =
+  DETECT_INTENT_SYSTEM_PROMPT +
+  "\n" +
+  "\n" +
+  "This request is for generating the assistant's final user-facing answer from provided sources only.\n" +
+  "- Do not mention tools, planning, or internal reasoning.\n" +
+  "- Do not invent sources or URLs.\n";
 
 type RawItem = { link: string; title: string; snippet?: string; imageUrl?: string };
 type SummItem = { index: number; summary_lines: string[] };
@@ -263,7 +272,9 @@ export async function summarizeItems(
 
     const resp =
       provider === "groq" && hasGroqKey
-        ? await GroqClient.getInstance().generateContent("openai/gpt-oss-20b", prompt)
+        ? await GroqClient.getInstance().generateContent("openai/gpt-oss-20b", prompt, {
+            systemInstruction: { parts: [{ text: CLOUDY_SUMMARY_SYSTEM_PROMPT }] },
+          })
         : await GeminiClient.getInstance().generateContent("gemini-2.5-flash", prompt);
 
     const parsed = extractJson(resp?.text || "");
@@ -320,7 +331,7 @@ export async function summarizeChatAnswerFromWebItems(
 
     const linkPrompt =
       "When you reference a source, use standard Markdown link syntax with a human label, " +
-      'for example [OpenAI](https://www.openai.com) "OpenAI". ' +
+      'for example [Atom Ctrl](https://example.com) "Atom Ctrl". ' +
       "Prefer the source title as the label. Do not paste bare URLs. " +
       "Try to use at least four distinct sources when that many are available. " +
       "Weave links naturally into sentences instead of listing them separately, and do not use [1]-style numeric citations. ";
@@ -330,7 +341,9 @@ export async function summarizeChatAnswerFromWebItems(
 
     const resp =
       provider === "groq" && hasGroqKey
-        ? await GroqClient.getInstance().generateContent("openai/gpt-oss-20b", prompt)
+        ? await GroqClient.getInstance().generateContent("openai/gpt-oss-20b", prompt, {
+            systemInstruction: { parts: [{ text: CLOUDY_SUMMARY_SYSTEM_PROMPT }] },
+          })
         : await GeminiClient.getInstance().generateContent("gemini-2.5-flash", prompt);
 
     return (resp?.text || "").trim();

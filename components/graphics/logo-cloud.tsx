@@ -130,7 +130,7 @@ export const LogoCloud = () => {
                                 <Image
                                     className="mx-auto h-6 w-fit dark:invert"
                                     src="https://html.tailus.io/blocks/customers/openai.svg"
-                                    alt="OpenAI Logo"
+                                    alt="AI Logo"
                                     height={24}
                                     width={120}
                                     unoptimized

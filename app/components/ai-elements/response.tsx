@@ -1,6 +1,7 @@
 'use client';
 
 import { cn } from '@/lib/utils';
+import Image from 'next/image';
 import type { ComponentProps, HTMLAttributes } from 'react';
 import { isValidElement, memo } from 'react';
 import ReactMarkdown, { type Options } from 'react-markdown';
@@ -175,23 +176,52 @@ export type ResponseProps = HTMLAttributes<HTMLDivElement> & {
 };
 
 const components: Options['components'] = {
+  p: ({ node, children, className, ...props }) => (
+    <p
+      className={cn('my-0.5 leading-[1.5] text-foreground/90', className)}
+      {...(props as any)}
+    >
+      {children}
+    </p>
+  ),
+  img: ({ node, className, ...props }) => {
+    const src = typeof (props as any)?.src === 'string' ? (props as any).src : '';
+    const alt = typeof (props as any)?.alt === 'string' ? (props as any).alt : '';
+    if (!src) return null;
+    return (
+      <Image
+        src={src}
+        alt={alt}
+        width={1200}
+        height={630}
+        unoptimized
+        className={cn('my-2 h-auto w-full rounded-md border border-border/60', className)}
+      />
+    );
+  },
   ol: ({ node, children, className, ...props }) => (
-    <ol className={cn('ml-4 list-outside list-decimal', className)} {...(props as any)}>
+    <ol
+      className={cn('my-0.5 ml-4 list-outside list-decimal', className)}
+      {...(props as any)}
+    >
       {children}
     </ol>
   ),
   li: ({ node, children, className, ...props }) => (
-    <li className={cn('py-1', className)} {...(props as any)}>
+    <li className={cn('py-0.5', className)} {...(props as any)}>
       {children}
     </li>
   ),
   ul: ({ node, children, className, ...props }) => (
-    <ul className={cn('ml-4 list-outside list-disc', className)} {...(props as any)}>
+    <ul
+      className={cn('my-0.5 ml-4 list-outside list-disc', className)}
+      {...(props as any)}
+    >
       {children}
     </ul>
   ),
   hr: ({ node, className, ...props }) => (
-    <hr className={cn('my-6 border-border', className)} {...(props as any)} />
+    <hr className={cn('my-3 border-border', className)} {...(props as any)} />
   ),
   strong: ({ node, children, className, ...props }) => (
     <span className={cn('font-semibold', className)} {...(props as any)}>
@@ -210,7 +240,10 @@ const components: Options['components'] = {
   ),
   h1: ({ node, children, className, ...props }) => (
     <h1
-      className={cn('mt-6 mb-2 font-semibold text-3xl', className)}
+      className={cn(
+        'mt-2 mb-1 font-serif font-bold text-[34px] leading-[1.15] tracking-[-0.02em] text-foreground border-b border-border/60 pb-1',
+        className
+      )}
       {...(props as any)}
     >
       {children}
@@ -218,39 +251,63 @@ const components: Options['components'] = {
   ),
   h2: ({ node, children, className, ...props }) => (
     <h2
-      className={cn('mt-6 mb-2 font-semibold text-2xl', className)}
+      className={cn(
+        'mt-3 mb-0.5 font-sans font-bold text-[22px] tracking-[-0.01em] text-foreground',
+        className
+      )}
       {...(props as any)}
     >
       {children}
     </h2>
   ),
   h3: ({ node, children, className, ...props }) => (
-    <h3 className={cn('mt-6 mb-2 font-semibold text-xl', className)} {...(props as any)}>
+    <h3
+      className={cn(
+        'mt-2.5 mb-0.5 font-sans font-semibold text-[18px] tracking-[-0.01em] text-foreground',
+        className
+      )}
+      {...(props as any)}
+    >
       {children}
     </h3>
   ),
   h4: ({ node, children, className, ...props }) => (
-    <h4 className={cn('mt-6 mb-2 font-semibold text-lg', className)} {...(props as any)}>
+    <h4
+      className={cn(
+        'mt-2.5 mb-0.5 font-sans font-semibold text-base tracking-[-0.01em] text-foreground',
+        className
+      )}
+      {...(props as any)}
+    >
       {children}
     </h4>
   ),
   h5: ({ node, children, className, ...props }) => (
     <h5
-      className={cn('mt-6 mb-2 font-semibold text-base', className)}
+      className={cn(
+        'mt-2.5 mb-0.5 font-sans font-semibold text-sm text-foreground',
+        className
+      )}
       {...(props as any)}
     >
       {children}
     </h5>
   ),
   h6: ({ node, children, className, ...props }) => (
-    <h6 className={cn('mt-6 mb-2 font-semibold text-sm', className)} {...(props as any)}>
+    <h6
+      className={cn(
+        'mt-2.5 mb-0.5 font-sans font-semibold text-sm text-foreground',
+        className
+      )}
+      {...(props as any)}
+    >
       {children}
     </h6>
   ),
   table: ({ node, children, className, ...props }) => (
-    <div className="my-4 overflow-x-auto">
+    <div className="my-2 overflow-x-auto">
       <table
-        className={cn('w-full border-collapse border border-border', className)}
+        className={cn('w-full border-collapse border border-border/60 text-sm', className)}
         {...(props as any)}
       >
         {children}
@@ -274,21 +331,21 @@ const components: Options['components'] = {
   ),
   th: ({ node, children, className, ...props }) => (
     <th
-      className={cn('px-4 py-2 text-left font-semibold text-sm', className)}
+      className={cn('px-3 py-2 text-left font-semibold text-xs text-foreground/80', className)}
       {...(props as any)}
     >
       {children}
     </th>
   ),
   td: ({ node, children, className, ...props }) => (
-    <td className={cn('px-4 py-2 text-sm', className)} {...(props as any)}>
+    <td className={cn('px-3 py-2 text-sm text-foreground/90', className)} {...(props as any)}>
       {children}
     </td>
   ),
   blockquote: ({ node, children, className, ...props }) => (
     <blockquote
       className={cn(
-        'my-4 border-muted-foreground/30 border-l-4 pl-4 text-muted-foreground italic',
+        'my-1.5 border-muted-foreground/30 border-l-4 pl-4 text-muted-foreground italic',
         className
       )}
       {...(props as any)}
@@ -366,7 +423,7 @@ export const Response = memo(
     return (
       <div
         className={cn(
-          "size-full break-words whitespace-pre-wrap [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+          "size-full break-words whitespace-pre-line [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
           className
         )}
         {...(props as any)}

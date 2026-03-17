@@ -99,6 +99,7 @@ export type DynamicSearchResult = {
     summary?: string | null;
     webItems: { link: string; title: string; summaryLines: string[]; imageUrl?: string }[];
     mediaItems: { src: string; alt?: string }[];
+    scrapedItems?: { url: string; title?: string; summary: string }[];
     weatherItems: WeatherItem[];
     youtubeItems?: YouTubeVideo[];
     shoppingItems?: ShoppingProduct[];

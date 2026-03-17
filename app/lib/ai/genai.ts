@@ -159,6 +159,10 @@ export async function detectIntent(
     const lower = trimmed.toLowerCase();
     const asksName =
       /\b(your name|who are you|what are you|who r u)\b/.test(lower);
+    const asksBuilder =
+      /\b(who built you|who made you|who created you|who developed you)\b/.test(
+        lower
+      ) || /\b(atom\s*tech|atom\s*technologies|atom\s*ctrl)\b/.test(lower);
 
     const line =
       lower.includes("thank") ||
@@ -166,8 +170,10 @@ export async function detectIntent(
       lower.includes("tysm") ||
       lower.includes("appreciate")
         ? "You're welcome! Anything else you want to do?"
+        : asksBuilder
+        ? "I'm Cloudy from Atom Ctrl by Atom Technologies. What do you want to build or learn today?"
         : asksName
-        ? "I'm Cloudy, your AI assistant. What can I help you with?"
+        ? "I'm Cloudy from Atom Ctrl by Atom Technologies. What can I help you with?"
         : lower === "hi" ||
           lower === "hello" ||
           lower === "hey" ||

@@ -7,6 +7,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import { useMutation, useQuery } from "convex/react";
 import { AIInput, type AIInputSubmitMeta } from "@/components/ui/ai-input";
+import { fireSubtleConfettiFromElement } from "@/components/ui/confetti";
 import { cn } from "@/lib/utils";
 import {
   Conversation,
@@ -114,6 +115,7 @@ type SearchConversationShellProps = {
   summary?: string | null;
   webItems: { link: string; title: string; summaryLines: string[]; imageUrl?: string }[];
   mediaItems: { src: string; alt?: string }[];
+  scrapedItems?: { url: string; title?: string; summary: string }[];
   isWeatherQuery?: boolean;
   weatherItems?: Array<{
     city: string;
@@ -303,10 +305,40 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
     steps: PlannedStep[];
     completedCount: number;
   } | null>(null);
+  const planPillDesktopRef = useRef<HTMLDivElement | null>(null);
+  const planPillMobileRef = useRef<HTMLDivElement | null>(null);
+  const planConfettiFiredRef = useRef(false);
   const [editTarget, setEditTarget] = useState<ChatMessage | null>(null);
   const [editDraft, setEditDraft] = useState("");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const copiedResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!currentPlanMeta || currentPlanMeta.steps.length === 0) {
+      planConfettiFiredRef.current = false;
+      return;
+    }
+    const isDone =
+      currentPlanMeta.completedCount >= currentPlanMeta.steps.length;
+    if (!isDone) {
+      planConfettiFiredRef.current = false;
+      return;
+    }
+    if (planConfettiFiredRef.current) return;
+    planConfettiFiredRef.current = true;
+
+    requestAnimationFrame(() => {
+      const desktop = planPillDesktopRef.current;
+      const mobile = planPillMobileRef.current;
+      const pick =
+        desktop && desktop.getBoundingClientRect().width > 0 ? desktop : mobile;
+      if (!pick) return;
+      if (pick.getBoundingClientRect().width <= 0) return;
+      fireSubtleConfettiFromElement(pick, {
+        colors: ["#111827", "#6b7280", "#9ca3af"],
+      } as any);
+    });
+  }, [currentPlanMeta?.completedCount, currentPlanMeta?.steps.length]);
 
   const handleCopyUserMessage = (msg: ChatMessage) => {
     if (!msg.content) return;
@@ -434,11 +466,12 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
               500
             )}`;
           }
-          const body = (m.content || "").trim().slice(0, 500);
+          const maxLen = m.role === "assistant" ? 1200 : 800;
+          const body = (m.content || "").trim().slice(0, maxLen);
           return `${prefix}: ${body}`;
         });
 
-      contextInputs.push(`User: ${nextPrompt.slice(0, 500)}`);
+      contextInputs.push(`User: ${nextPrompt.slice(0, 800)}`);
 
       setReasoningMessageId(responseMessageId);
       const plan = await planQuerySteps(nextPrompt, contextInputs);
@@ -755,6 +788,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
      summary: props.summary ?? null,
      webItems: props.webItems,
      mediaItems: props.mediaItems,
+     scrapedItems: props.scrapedItems ?? [],
      isWeatherQuery: props.isWeatherQuery,
      weatherItems: props.weatherItems ?? [],
      youtubeItems: props.youtubeItems ?? [],
@@ -772,6 +806,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
     summary,
     webItems,
     mediaItems,
+    scrapedItems,
     isWeatherQuery,
     weatherItems,
     youtubeItems,
@@ -799,6 +834,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
         summary: null,
         webItems: [],
         mediaItems: [],
+        scrapedItems: [],
         isWeatherQuery: false,
         weatherItems: [],
         youtubeItems: [],
@@ -837,6 +873,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
         summary: null,
         webItems: [],
         mediaItems: [],
+        scrapedItems: [],
         isWeatherQuery: false,
         weatherItems: [],
         youtubeItems: [],
@@ -1194,7 +1231,13 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
 
   useEffect(() => {
     if (!pendingStream) return;
-    if (pendingMediaLoad.messageId !== null && pendingMediaLoad.messageId !== pendingStream.messageId) return;
+    if (
+      pendingStream.type === "search" &&
+      pendingMediaLoad.messageId !== null &&
+      pendingMediaLoad.messageId !== pendingStream.messageId
+    ) {
+      return;
+    }
 
     streamTaskRef.current += 1;
     const taskId = streamTaskRef.current;
@@ -1662,7 +1705,8 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
           const summary = m.data.overallSummaryLines?.filter(Boolean).join(" ") || "Search results";
           return `${prefix}: (Search for "${m.data.searchQuery}") ${summary.slice(0, 500)}`;
         }
-        const body = (m.content || "").trim().slice(0, 500);
+        const maxLen = m.role === "assistant" ? 1200 : 800;
+        const body = (m.content || "").trim().slice(0, maxLen);
         return `${prefix}: ${body}`;
       });
 
@@ -1722,7 +1766,8 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
             const searchQuery = m.data.searchQuery || "";
             return `${prefix}: (Search for "${searchQuery}") ${summary.slice(0, 500)}`;
           }
-          const body = (m.content || "").trim().slice(0, 500);
+          const maxLen = m.role === "assistant" ? 1200 : 800;
+          const body = (m.content || "").trim().slice(0, maxLen);
           return `${prefix}: ${body}`;
         });
     })();
@@ -1967,7 +2012,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
       }
       const contextInputs = [
         ...baseContext,
-        `User: ${trimmed.slice(0, 500)}`,
+        `User: ${trimmed.slice(0, 800)}`,
         effectiveQuery !== trimmed ? `EffectiveQuery: ${effectiveQuery}` : "",
       ].filter(Boolean);
 
@@ -2372,7 +2417,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                       <Message from="user" className="ml-auto">
                         <div className="w-full max-w-xl flex flex-row justify-end">
                           <MessageContent
-                            className="bg-neutral-100 text-neutral-900 rounded-xl px-4 py-2 shadow-sm text-center"
+                            className="bg-neutral-100 text-neutral-900 rounded-xl px-4 py-2 shadow-sm text-left"
                             data-cloudy-kind="conversation"
                             data-cloudy-role="user"
                             data-cloudy-message-id="initial-search"
@@ -2427,6 +2472,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                                 summaryIsStreaming={chatSummaryStatus === "loading"}
                                 webItems={webItems}
                                 mediaItems={mediaItems}
+                                scrapedItems={scrapedItems}
                                 weatherItems={weatherItems}
                                 youtubeItems={youtubeItems}
                                 shoppingItems={shoppingItems}
@@ -2549,6 +2595,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                                 }
                                 webItems={msg.data.webItems}
                                 mediaItems={msg.data.mediaItems}
+                                scrapedItems={msg.data.scrapedItems}
                                 weatherItems={msg.data.weatherItems}
                                 youtubeItems={msg.data.youtubeItems}
                                 shoppingItems={msg.data.shoppingItems}
@@ -2618,7 +2665,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                               </div>
                             )}
                             <MessageContent
-                              className="bg-neutral-100 text-neutral-900 rounded-xl px-4 py-2 text-center"
+                              className="bg-neutral-100 text-neutral-900 rounded-xl px-4 py-2 text-left"
                               data-cloudy-kind="conversation"
                               data-cloudy-role={msg.role}
                               data-cloudy-message-id={String(msg.id)}
@@ -2795,7 +2842,10 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                       </div>
                     </div>
                   ) : (
-                    <div className="rounded-2xl border border-border/60 bg-white/80 px-5 py-3 text-sm text-muted-foreground flex items-center justify-between">
+                    <div
+                      ref={planPillDesktopRef}
+                      className="rounded-2xl border border-border/60 bg-white/80 px-5 py-3 text-sm text-muted-foreground flex items-center justify-between"
+                    >
                       <div className="flex items-center gap-3 min-w-0">
                         <span className="inline-flex h-5 w-5 items-center justify-center">
                           <Image
@@ -2900,7 +2950,10 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                       </div>
                     </div>
                   ) : (
-                    <div className="rounded-2xl border border-border/60 bg-white/80 px-5 py-3 text-sm text-muted-foreground flex items-center justify-between">
+                    <div
+                      ref={planPillMobileRef}
+                      className="rounded-2xl border border-border/60 bg-white/80 px-5 py-3 text-sm text-muted-foreground flex items-center justify-between"
+                    >
                       <div className="flex items-center gap-3 min-w-0">
                         <span className="inline-flex h-5 w-5 items-center justify-center">
                           <Image

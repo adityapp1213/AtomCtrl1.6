@@ -88,6 +88,8 @@ function HomeSearchInputContent({
   const [hasRecognition, setHasRecognition] = useState(false);
   const [selectedApp, setSelectedApp] = useState<"apps" | "youtube" | "shopping">("apps");
   const [chatSessionId, setChatSessionId] = useState<string | null>(null);
+  const [showComingSoon, setShowComingSoon] = useState(false);
+  const comingSoonTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const suggestions = [
     "Search the web for me",
@@ -147,6 +149,14 @@ function HomeSearchInputContent({
       }
     })();
   }, [userId, initChat]);
+
+  useEffect(() => {
+    return () => {
+      if (comingSoonTimeoutRef.current) {
+        clearTimeout(comingSoonTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const handleSuggestionClick = (value: string) => {
     setInput(value);
@@ -406,16 +416,33 @@ function HomeSearchInputContent({
 
         <div className="flex items-center justify-between px-4 pb-4 pt-3">
           <div className="flex items-center gap-3 text-sm text-muted-foreground">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="h-8 gap-2"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <Plus className="h-4 w-4" />
-              <span>Add pages or files</span>
-            </Button>
+            <div className="relative">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                title="Coming soon"
+                className="h-8 gap-2 cursor-not-allowed opacity-70"
+                onClick={(e) => {
+                  e.preventDefault();
+                  if (comingSoonTimeoutRef.current) {
+                    clearTimeout(comingSoonTimeoutRef.current);
+                  }
+                  setShowComingSoon(true);
+                  comingSoonTimeoutRef.current = setTimeout(() => {
+                    setShowComingSoon(false);
+                  }, 900);
+                }}
+              >
+                <Plus className="h-4 w-4" />
+                <span>Add pages or files</span>
+              </Button>
+              {showComingSoon && (
+                <div className="absolute -top-7 left-0 rounded-full bg-black/80 px-3 py-1 text-[11px] text-white">
+                  Coming soon
+                </div>
+              )}
+            </div>
 
             <DropdownMenu>
               <DropdownMenuTrigger asChild>

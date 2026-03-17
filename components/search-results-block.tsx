@@ -80,6 +80,7 @@ type SearchResultsBlockProps = {
   summaryIsStreaming?: boolean;
   webItems: { link: string; title: string; summaryLines: string[]; imageUrl?: string }[];
   mediaItems: { src: string; alt?: string }[];
+  scrapedItems?: { url: string; title?: string; summary: string }[];
   weatherItems?: WeatherItem[];
   youtubeItems?: YouTubeVideo[];
   shoppingItems?: ShoppingProduct[];
@@ -97,6 +98,7 @@ export function SearchResultsBlock({
   summaryIsStreaming,
   webItems,
   mediaItems,
+  scrapedItems,
   weatherItems,
   youtubeItems,
   shoppingItems,
@@ -109,29 +111,41 @@ export function SearchResultsBlock({
   // keep shouldShowTabs for backwards compatibility, but UI is always inline (no tabs)
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [citationActive, setCitationActive] = useState(false);
-  const rawSummaryText = summaryIsStreaming
+  const displayText = summaryIsStreaming
     ? String(summary ?? "")
-    : (summary || "").trim() || overallSummaryLines.filter(Boolean).join(" ");
-  const firstParagraph =
-    rawSummaryText.split(/\n\s*\n/)[0] || rawSummaryText;
-  const trimmedWords = firstParagraph.split(/\s+/).slice(0, 160).join(" ");
-  const summaryText = trimmedWords.trim();
-  const summaryParagraphs = summaryText
-    ? summaryText.split(/\n\s*\n/).filter(Boolean)
-    : [];
-  const summaryWordSplit = summaryText ? summaryText.split(/\s+/) : [];
-  const summarySplitIndex = Math.max(
-    1,
-    Math.floor(summaryWordSplit.length / 2)
-  );
-  const summaryFirst =
-    summaryParagraphs.length >= 2
-      ? summaryParagraphs[0]
-      : summaryWordSplit.slice(0, summarySplitIndex).join(" ");
-  const summarySecond =
-    summaryParagraphs.length >= 2
-      ? summaryParagraphs.slice(1).join("\n\n")
-      : summaryWordSplit.slice(summarySplitIndex).join(" ");
+    : (summary || "").trim() || overallSummaryLines.filter(Boolean).join("\n");
+  const hasAnyAnswerText = Boolean((displayText || "").trim());
+  const fallbackFromSources =
+    !hasAnyAnswerText && Array.isArray(webItems) && webItems.length > 0
+      ? webItems
+          .slice(0, 4)
+          .map((item) => {
+            const line =
+              item.summaryLines?.find((l) => l && l.trim().length > 0) || "";
+            return line;
+          })
+          .filter(Boolean)
+          .join("\n")
+      : "";
+  const fullAnswerText =
+    (displayText || "").trim() ||
+    overallSummaryLines.filter(Boolean).join("\n").trim() ||
+    (fallbackFromSources || "").trim();
+  const answerParts = (() => {
+    const raw = String(fullAnswerText || "").trim();
+    if (!raw) return { top: "", bottom: "" };
+    const paragraphs = raw.split(/\n\s*\n/).filter(Boolean);
+    if (paragraphs.length >= 2) {
+      return { top: paragraphs[0], bottom: paragraphs.slice(1).join("\n\n") };
+    }
+    const words = raw.split(/\s+/).filter(Boolean);
+    if (words.length <= 1) return { top: raw, bottom: raw };
+    const splitIndex = Math.ceil(words.length / 2);
+    return {
+      top: words.slice(0, splitIndex).join(" "),
+      bottom: words.slice(splitIndex).join(" "),
+    };
+  })();
 
   const chatMediaItems = mediaItems
     .map((item) => ({ ...item, src: normalizeExternalUrl(item.src) }))
@@ -181,6 +195,9 @@ export function SearchResultsBlock({
 
   const shoppingItemsLimited = Array.isArray(shoppingItems)
     ? shoppingItems.slice(0, 10)
+    : [];
+  const scrapedItemsLimited = Array.isArray(scrapedItems)
+    ? scrapedItems.slice(0, 2)
     : [];
 
   const handleShoppingPrev = () => {
@@ -354,14 +371,12 @@ export function SearchResultsBlock({
             </div>
           )}
 
-      {/* Main inline answer (top part) */}
+      {/* Response (top) */}
       <div className="space-y-3">
-        {summaryText || overallSummaryLines.length > 0 ? (
+        {fullAnswerText ? (
           <div className="text-sm">
             {renderSummaryWithCitations(
-              summaryFirst ||
-                summaryText ||
-                overallSummaryLines.filter(Boolean).join(" ")
+              summaryIsStreaming ? fullAnswerText : answerParts.top
             )}
           </div>
         ) : (
@@ -420,12 +435,41 @@ export function SearchResultsBlock({
         </div>
       )}
 
-      {/* Bottom part of the answer (continuation) */}
-      {summarySecond && (
+      {/* Response (bottom) */}
+      {!summaryIsStreaming && answerParts.bottom && (
         <div className="space-y-3">
           <div className="text-sm">
-            {renderSummaryWithCitations(summarySecond)}
+            {renderSummaryWithCitations(answerParts.bottom)}
           </div>
+        </div>
+      )}
+
+      {scrapedItemsLimited.length > 0 && (
+        <div className="w-full space-y-2">
+          <div className="text-xs font-medium text-muted-foreground">
+            Site-wise details
+          </div>
+          {scrapedItemsLimited.map((item, idx) => {
+            const url = item.url;
+            const display = formatDisplayUrl(url);
+            return (
+              <div
+                key={`${url}:${idx}`}
+                className="rounded-lg border border-border/60 bg-background/70 px-4 py-3"
+              >
+                <button
+                  type="button"
+                  className="text-xs font-medium text-primary underline break-words"
+                  onClick={() => onLinkClick?.(url, display)}
+                >
+                  {display}
+                </button>
+                <div className="mt-1 text-sm">
+                  <Response parseIncompleteMarkdown>{item.summary}</Response>
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -597,7 +641,7 @@ export function SearchResultsBlock({
           If there is no summary, weather, or other content, show a fallback message. */}
       {!webItems.length &&
         !weatherItems?.length &&
-        !summaryText &&
+        !hasAnyAnswerText &&
         !summaryIsStreaming && (
           <div className="text-sm text-muted-foreground">No results found.</div>
         )}

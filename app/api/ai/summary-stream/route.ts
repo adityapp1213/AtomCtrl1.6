@@ -33,6 +33,32 @@ async function* streamGemini(prompt: string) {
   }
 }
 
+async function* coerceToAsyncIterable(value: unknown) {
+  const anyValue = value as any;
+  if (anyValue && typeof anyValue[Symbol.asyncIterator] === "function") {
+    for await (const chunk of anyValue as AsyncIterable<any>) {
+      yield chunk;
+    }
+    return;
+  }
+
+  if (anyValue && typeof anyValue.getReader === "function") {
+    const reader = anyValue.getReader();
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (value) yield value;
+      }
+    } finally {
+      try {
+        reader.releaseLock?.();
+      } catch {
+      }
+    }
+  }
+}
+
 export async function POST(req: Request) {
   let payload: any = null;
   try {
@@ -83,15 +109,37 @@ export async function POST(req: Request) {
 
   const encoder = new TextEncoder();
   const body = new ReadableStream({
-    async start(controller) {
-      try {
-        for await (const chunk of stream as AsyncIterable<string>) {
-          if (chunk) controller.enqueue(encoder.encode(chunk));
+    start(controller) {
+      let closed = false;
+      const closeOnce = () => {
+        if (closed) return;
+        closed = true;
+        try {
+          controller.close();
+        } catch {
         }
-      } catch {
-      } finally {
-        controller.close();
-      }
+      };
+
+      (async () => {
+        try {
+          for await (const rawChunk of coerceToAsyncIterable(stream)) {
+            if (req.signal.aborted) break;
+            const chunk =
+              typeof rawChunk === "string"
+                ? rawChunk
+                : rawChunk instanceof Uint8Array
+                ? new TextDecoder().decode(rawChunk)
+                : String(rawChunk ?? "");
+            if (!chunk) continue;
+            controller.enqueue(encoder.encode(chunk));
+          }
+        } catch {
+        } finally {
+          closeOnce();
+        }
+      })();
+    },
+    cancel() {
     },
   });
 

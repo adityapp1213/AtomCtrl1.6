@@ -19,6 +19,8 @@ import {
   type WeatherItem,
 } from "@/app/lib/weather";
 import { detectIntent } from "@/app/lib/ai/genai";
+import { DETECT_INTENT_SYSTEM_PROMPT } from "@/app/lib/ai/system-prompts";
+import { scrapeUrls, type ScrapedUrlSummary } from "@/app/lib/ai/firecrawl";
 import type { DynamicSearchResult } from "@/app/actions/search";
 
 export type PlannedTool =
@@ -27,7 +29,8 @@ export type PlannedTool =
   | "image_search"
   | "youtube_search"
   | "shopping_search"
-  | "weather_city";
+  | "weather_city"
+  | "scrape_urls";
 
 export type PlannedStep = {
   id: string;
@@ -53,6 +56,137 @@ export type RunAgentOptions = {
   planOverride?: PlanResult;
 };
 
+function extractConversationContextObject(contextLines: string[]) {
+  for (let i = contextLines.length - 1; i >= 0; i -= 1) {
+    const line = String(contextLines[i] || "");
+    const prefix = "ConversationContext:";
+    if (!line.startsWith(prefix)) continue;
+    const jsonText = line.slice(prefix.length).trim();
+    if (!jsonText) continue;
+    try {
+      const parsed = JSON.parse(jsonText);
+      return parsed && typeof parsed === "object" ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function stripCodeForSearchTopic(value: string) {
+  const raw = String(value || "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`[^`]*`/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!raw) return "";
+  return raw.length > 160 ? raw.slice(0, 160) : raw;
+}
+
+function extractUrlsFromText(value: string) {
+  const raw = String(value || "");
+  const httpMatches = raw.match(/https?:\/\/[^\s)<>"']+/gi) || [];
+  const bareMatches =
+    raw.match(/\b(?:www\.)?[a-z0-9.-]+\.[a-z]{2,}(?:\/[^\s)<>"']*)?/gi) || [];
+
+  const candidates = [...httpMatches, ...bareMatches]
+    .map((m) => m.replace(/[),.;]+$/g, "").trim())
+    .filter(Boolean)
+    .filter((m) => !m.includes("@"));
+
+  const normalized = candidates
+    .map((m) => (/^https?:\/\//i.test(m) ? m : `https://${m}`))
+    .map((m) => {
+      try {
+        const u = new URL(m);
+        if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+        return u.toString();
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean) as string[];
+
+  return Array.from(new Set(normalized));
+}
+
+function looksLikeSmallTalkQuery(query: string) {
+  const raw = (query ?? "").trim().toLowerCase();
+  if (!raw) return false;
+  if (raw.length > 80) return false;
+  const oneWord = raw.replace(/[!?.,]/g, "").trim();
+  const allowed = new Set([
+    "hi",
+    "hello",
+    "hey",
+    "yo",
+    "sup",
+    "thanks",
+    "thank",
+    "thx",
+    "ty",
+    "ok",
+    "okay",
+    "yes",
+    "no",
+    "cool",
+    "nice",
+    "great",
+    "awesome",
+    "lol",
+  ]);
+  if (allowed.has(oneWord)) return true;
+  if (/\b(thank you|thanks a lot|appreciate it)\b/.test(raw)) return true;
+  return false;
+}
+
+function isUrlSummaryOnlyRequest(query: string) {
+  const raw = String(query || "");
+  const withoutUrls = raw
+    .replace(/https?:\/\/[^\s)<>"']+/gi, " ")
+    .replace(/\b(?:www\.)?[a-z0-9.-]+\.[a-z]{2,}(?:\/[^\s)<>"']*)?/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!withoutUrls) return true;
+  if (/^(analyze|analyse|summarize|summary|overview|read|scrape)\b/i.test(withoutUrls)) {
+    return withoutUrls.split(/\s+/).length <= 8;
+  }
+  return false;
+}
+
+function extractFollowupTopic(contextLines: string[], query: string) {
+  const ctx = extractConversationContextObject(contextLines);
+  const latestSearchQuery =
+    typeof ctx?.latest_search?.searchQuery === "string"
+      ? ctx.latest_search.searchQuery.trim()
+      : "";
+
+  const lastSearchFromContext = (() => {
+    for (let i = contextLines.length - 1; i >= 0; i -= 1) {
+      const line = String(contextLines[i] || "");
+      const m = line.match(/\(Search for "([^"]+)"\)/i);
+      if (m && m[1]) return m[1].trim();
+    }
+    return "";
+  })();
+
+  const lastUserFromContext = (() => {
+    for (let i = contextLines.length - 1; i >= 0; i -= 1) {
+      const line = String(contextLines[i] || "");
+      if (!line.startsWith("User:")) continue;
+      const t = line.replace(/^User:\s*/i, "").trim();
+      if (!t) continue;
+      if (t.toLowerCase() === query.toLowerCase()) continue;
+      return t;
+    }
+    return "";
+  })();
+
+  const best =
+    latestSearchQuery || lastSearchFromContext || stripCodeForSearchTopic(lastUserFromContext);
+  return { topic: stripCodeForSearchTopic(best) };
+}
+
 const PLANNER_SYSTEM_PROMPT =
   "You are Cloudy's planning module.\n" +
   "\n" +
@@ -71,11 +205,18 @@ const PLANNER_SYSTEM_PROMPT =
   "- youtube_search    → call YouTube API for tutorial / demo / explainer videos.\n" +
   "- shopping_search   → call shopping search for products and deals.\n" +
   "- weather_city      → call weather API when the user asks about weather in a city.\n" +
+  "- scrape_urls       → scrape and summarize up to 2 URLs (in parallel) for deeper page-level understanding.\n" +
   "\n" +
   "Planning rules:\n" +
   "- Prefer MULTI-STEP plans when tools add clear value.\n" +
   "- Group tools that can run together (web_search + youtube_search + shopping_search) by setting canRunInParallel = true.\n" +
   "- When you include web_search, you should usually ALSO include image_search in parallel to provide illustrative images.\n" +
+  "- If the user provides a specific URL or asks to analyze a specific page, include scrape_urls.\n" +
+  "- scrape_urls should run AFTER web_search when you need deeper detail than snippets, and should NOT be parallel with web_search.\n" +
+  "- If the user is trying to find people, jobs, roles, hiring pages, contact info, or other structured details that are usually inside a site page,\n" +
+  "  you should plan: web_search → scrape_urls (top 2 links) → answer.\n" +
+  "- If the user is asking to explain, rewrite, summarize, or break down something from the conversation (\"explain it\", \"chunk by chunk\", \"what you wrote\"), use answer mode and do NOT use tools.\n" +
+  "- If the user asks for a tutorial/guide and the subject is \"it/this/that\" or implied, treat it as a follow-up to the most recent topic in the provided context.\n" +
   "- Use answer alone only for casual chat or when tools are clearly unnecessary.\n" +
   "\n" +
   "Output:\n" +
@@ -92,6 +233,32 @@ export async function planQuerySteps(
   const trimmed = (query || "").trim();
   if (!trimmed) {
     return { mode: "answer", reasoning: "", steps: [] };
+  }
+
+  const explicitUrls = extractUrlsFromText(trimmed);
+  if (explicitUrls.length > 0) {
+    const summaryOnly = isUrlSummaryOnlyRequest(trimmed);
+    return {
+      mode: "plan",
+      reasoning:
+        summaryOnly
+          ? "The user provided explicit URLs, so the best next step is to scrape and summarize them directly."
+          : "The user provided explicit URLs and a concrete task, so the best next step is to scrape the page(s) and answer using their content.",
+      steps: [
+        {
+          id: "s1",
+          description: summaryOnly
+            ? "Scrape and summarize the provided URLs."
+            : "Scrape the provided URLs and answer using their contents.",
+          tool: "scrape_urls",
+          canRunInParallel: false,
+        },
+      ],
+    };
+  }
+
+  if (looksLikeSmallTalkQuery(trimmed)) {
+    return { mode: "answer", reasoning: "The user input is small talk.", steps: [] };
   }
 
   const hasGroqKey = Boolean(
@@ -166,13 +333,14 @@ export async function planQuerySteps(
         "youtube_search",
         "shopping_search",
         "weather_city",
+        "scrape_urls",
       ];
       if (!validTools.includes(tool)) return null;
       return {
         id: String(s.id || `s${index + 1}`),
         description: String(s.description || "").slice(0, 280),
         tool,
-        canRunInParallel: Boolean(s.canRunInParallel),
+        canRunInParallel: tool === "scrape_urls" ? false : Boolean(s.canRunInParallel),
       };
     })
     .filter(Boolean) as PlannedStep[];
@@ -203,14 +371,36 @@ export async function planQuerySteps(
     });
   }
 
+  if (
+    mode === "plan" &&
+    steps.some((s) => s.tool === "web_search") &&
+    !steps.some((s) => s.tool === "scrape_urls") &&
+    /\b(read|scrape|deep dive|full page|from the page|from the site|from the link|jobs?|career|careers|hiring|apply|openings?|roles?|positions?|people|person|team|staff|contact|email|linkedin)\b/i.test(trimmed)
+  ) {
+    const insertAt = Math.max(
+      0,
+      steps.findIndex((s) => s.tool === "web_search") + 1
+    );
+    steps.splice(insertAt, 0, {
+      id: `s${steps.length + 1}`,
+      description: "Scrape the top links for deeper page-level detail.",
+      tool: "scrape_urls",
+      canRunInParallel: false,
+    });
+  }
+
   return { mode, reasoning, steps };
 }
 
 const ANSWER_SYSTEM_PROMPT =
-  "You are Cloudy, a helpful conversational AI assistant. " +
-  "Given the user query and optional context, respond directly and conversationally. " +
-  "Do not mention tools, planning, or internal reasoning. " +
-  "Keep the answer focused on what the user asked for.";
+  DETECT_INTENT_SYSTEM_PROMPT +
+  "\n" +
+  "\n" +
+  "This request is for generating the assistant's final user-facing answer.\n" +
+  "- Use the provided JSON payload fields: query, context, and topic (if present).\n" +
+  "- If the user is asking a follow-up (short reply, pronouns like it/this/that, or requests like tutorial/guide), you MUST anchor your answer to the prior topic from context/topic.\n" +
+  "- Do not define generic terms like \"what is a tutorial\" unless the user explicitly asks.\n" +
+  "- Do not mention tools, planning, or internal reasoning.\n";
 
 export async function answerQueryDirect(
   query: string,
@@ -218,6 +408,31 @@ export async function answerQueryDirect(
 ): Promise<string> {
   const trimmed = (query || "").trim();
   if (!trimmed) return "";
+
+  if (looksLikeSmallTalkQuery(trimmed)) {
+    return "Hi! What can I help you with?";
+  }
+
+  const lower = trimmed.toLowerCase();
+  const isIdentityQuestion =
+    /\b(who\s+built\s+you|who\s+made\s+you|who\s+created\s+you|who\s+developed\s+you|who\s+is\s+your\s+creator)\b/.test(
+      lower
+    ) ||
+    /\b(who\s+are\s+you|what\s+are\s+you|your\s+name)\b/.test(lower);
+  const isAtomQuestion =
+    /\b(atom\s*tech|atom\s*technologies|atom\s*ctrl|g[öo]del\s+ai)\b/.test(
+      lower
+    );
+
+  if (isIdentityQuestion || isAtomQuestion) {
+    const includeLogo = isAtomQuestion || /atom/.test(lower);
+    return (
+      `${includeLogo ? "![Atom](/atommmmmmm.png)\n\n" : ""}` +
+      "I'm Cloudy from Atom Ctrl by Atom Technologies (AtomTech).\n\n" +
+      "AtomTech builds practical AI systems that can operate real-world software, starting with Atom Ctrl (a voice-first search assistant integrated into chat) and the longer-term Gödel AI architecture (a fast general brain + specialist domain experts).\n\n" +
+      "Atom Technologies was founded by Aditya Panigarhi."
+    );
+  }
 
   const hasGroqKey = Boolean(
     process.env.GROQ_API_KEY || process.env.OPEN_AI_API_KEY
@@ -227,9 +442,11 @@ export async function answerQueryDirect(
   }
 
   const client = GroqClient.getInstance();
+  const topic = extractFollowupTopic(contextLines, trimmed).topic;
   const payload = {
     query: trimmed,
     context: contextLines.slice(-40),
+    topic,
   };
 
   const result = await client.generateContent(
@@ -260,6 +477,25 @@ export async function runAgentPlan(
   if (!trimmed) return { type: "text", content: "" };
 
   const contextLines = options.context ?? [];
+  if (looksLikeSmallTalkQuery(trimmed)) {
+    const answer = await answerQueryDirect(trimmed, contextLines);
+    return { type: "text", content: answer };
+  }
+  const lower = trimmed.toLowerCase();
+  const isIdentityQuestion =
+    /\b(who\s+built\s+you|who\s+made\s+you|who\s+created\s+you|who\s+developed\s+you|who\s+is\s+your\s+creator)\b/.test(
+      lower
+    ) ||
+    /\b(who\s+are\s+you|what\s+are\s+you|your\s+name)\b/.test(lower);
+  const isAtomQuestion =
+    /\b(atom\s*tech|atom\s*technologies|atom\s*ctrl|g[öo]del\s+ai)\b/.test(
+      lower
+    );
+  if (isIdentityQuestion || isAtomQuestion) {
+    const answer = await answerQueryDirect(trimmed, contextLines);
+    return { type: "text", content: answer };
+  }
+
   const plan =
     options.planOverride ?? (await planQuerySteps(trimmed, contextLines));
 
@@ -279,6 +515,7 @@ export async function runAgentPlan(
   const needsYoutube = toolSteps.some((s) => s.tool === "youtube_search");
   const needsShopping = toolSteps.some((s) => s.tool === "shopping_search");
   const needsWeather = toolSteps.some((s) => s.tool === "weather_city");
+  const needsScrape = toolSteps.some((s) => s.tool === "scrape_urls");
   const hasNonYoutubeTools = toolSteps.some((s) => s.tool !== "youtube_search");
   const youtubeMaxResults = hasNonYoutubeTools ? 1 : 4;
 
@@ -291,46 +528,39 @@ export async function runAgentPlan(
     imageUrl?: string;
   }[] = [];
   let mediaItems: { src: string; alt?: string }[] = [];
+  let scrapedItems: ScrapedUrlSummary[] = [];
   let youtubeItems: YouTubeVideo[] = [];
   let shoppingItems: ShoppingProduct[] = [];
   let weatherItems: WeatherItem[] = [];
   let searchQueryForTools = trimmed;
+  const explicitUrls = extractUrlsFromText(trimmed);
 
   const looksReferential = /\b(it|this|that|these|those|them|again|same|one)\b/i.test(
     trimmed
   );
   const wantsTutorial = /tutorial|how to|guide|walkthrough|demo|example/i.test(trimmed);
-  const lastSearchFromContext = (() => {
-    for (let i = contextLines.length - 1; i >= 0; i -= 1) {
-      const line = String(contextLines[i] || "");
-      const m = line.match(/\(Search for "([^"]+)"\)/i);
-      if (m && m[1]) return m[1].trim();
-    }
-    return "";
-  })();
-
-  const lastUserFromContext = (() => {
-    for (let i = contextLines.length - 1; i >= 0; i -= 1) {
-      const line = String(contextLines[i] || "");
-      if (!line.startsWith("User:")) continue;
-      const t = line.replace(/^User:\s*/i, "").trim();
-      if (!t) continue;
-      if (t.toLowerCase() === trimmed.toLowerCase()) continue;
-      return t;
-    }
-    return "";
-  })();
-
-  const shouldUseContextTopic = looksReferential || wantsTutorial;
-  const referentialTopic =
-    shouldUseContextTopic && (lastSearchFromContext || lastUserFromContext)
-      ? (lastSearchFromContext || lastUserFromContext)
-      : "";
-  if (referentialTopic) {
-    searchQueryForTools = referentialTopic;
+  const wantsFollowup =
+    looksReferential ||
+    wantsTutorial ||
+    /^\s*(explain|elaborate|break\s+down|walk\s+me\s+through|step\s+by\s+step)\b/i.test(
+      trimmed
+    );
+  const followupTopic = wantsFollowup
+    ? extractFollowupTopic(contextLines, trimmed).topic
+    : "";
+  if (followupTopic) {
+    searchQueryForTools = followupTopic;
   }
 
-  if (!referentialTopic && (needsWeb || needsImages || needsYoutube || needsShopping || needsWeather)) {
+  if (
+    !followupTopic &&
+    (needsWeb ||
+      needsImages ||
+      needsYoutube ||
+      needsShopping ||
+      needsWeather ||
+      needsScrape)
+  ) {
     try {
       const intent = await detectIntent(trimmed, contextLines, aiProvider);
       const candidate =
@@ -356,11 +586,11 @@ export async function runAgentPlan(
   if (currentBatch.length) batches.push(currentBatch);
 
   const queryForTool = (tool: PlannedTool) => {
-    if (!referentialTopic) return searchQueryForTools;
+    if (!followupTopic) return searchQueryForTools;
     if ((tool === "web_search" || tool === "youtube_search") && wantsTutorial) {
-      return `${referentialTopic} tutorial`;
+      return `${followupTopic} tutorial`;
     }
-    return referentialTopic;
+    return followupTopic;
   };
 
   const runTool = async (tool: PlannedTool) => {
@@ -390,6 +620,28 @@ export async function runAgentPlan(
         };
       case "weather_city":
         return { tool, value: await fetchWeatherForCity(toolQuery) };
+      case "scrape_urls": {
+        const urls =
+          explicitUrls.length > 0
+            ? explicitUrls
+            : Array.isArray(rawWebItems) && rawWebItems.length > 0
+              ? rawWebItems
+                  .map((it: any) => String(it?.link || "").trim())
+                  .filter(Boolean)
+                  .slice(0, 2)
+              : [];
+        const mode =
+          explicitUrls.length > 0 && !isUrlSummaryOnlyRequest(trimmed)
+            ? "answer"
+            : "summary";
+        const scraped = await scrapeUrls({
+          urls,
+          query: trimmed,
+          mode,
+          providerOverride: aiProvider,
+        });
+        return { tool, value: scraped };
+      }
       default:
         return { tool, value: null };
     }
@@ -397,6 +649,8 @@ export async function runAgentPlan(
 
   let rawWebItems: any[] = [];
   let rawMedia: any[] = [];
+  let rawScraped: any[] = [];
+  let rawScrapeAnswer = "";
   let yt: any[] = [];
   let shop: any[] = [];
   let weatherItem: any = null;
@@ -408,12 +662,36 @@ export async function runAgentPlan(
       if (r.tool === "image_search" && Array.isArray(r.value)) rawMedia = r.value;
       if (r.tool === "youtube_search" && Array.isArray(r.value)) yt = r.value;
       if (r.tool === "shopping_search" && Array.isArray(r.value)) shop = r.value;
+      if (r.tool === "scrape_urls" && r.value && typeof r.value === "object") {
+        const items = (r.value as any).items;
+        const answer = (r.value as any).answer;
+        if (Array.isArray(items)) rawScraped = items;
+        if (typeof answer === "string") rawScrapeAnswer = answer;
+      }
       if (r.tool === "weather_city") weatherItem = r.value;
     }
   }
 
   if (Array.isArray(rawMedia)) {
     mediaItems = rawMedia;
+  }
+
+  if (Array.isArray(rawScraped)) {
+    scrapedItems = rawScraped;
+  }
+
+  const explicitScrapeAnswerMode =
+    explicitUrls.length > 0 && !isUrlSummaryOnlyRequest(trimmed);
+  if (explicitScrapeAnswerMode && rawScrapeAnswer.trim()) {
+    const sources = (scrapedItems.length ? scrapedItems.map((s) => s.url) : explicitUrls).slice(
+      0,
+      2
+    );
+    const header = sources.map((u) => `- ${u}`).join("\n");
+    return {
+      type: "text",
+      content: `Sources:\n${header}\n\n${rawScrapeAnswer.trim()}`,
+    };
   }
 
   if (Array.isArray(yt)) {
@@ -454,6 +732,13 @@ export async function runAgentPlan(
       searchQueryForTools,
       aiProvider
     );
+  } else if (scrapedItems.length > 0) {
+    if (rawScrapeAnswer.trim()) {
+      summary = rawScrapeAnswer.trim();
+      overallSummaryLines = ["Read the link and answered using its contents.", ""];
+    } else {
+      overallSummaryLines = ["Details from the sites below.", ""];
+    }
   } else if (hasShopping) {
     const shoppingSummary = await summarizeChatAnswerFromShoppingItems(
       shoppingItems.map((p) => ({
@@ -483,6 +768,7 @@ export async function runAgentPlan(
       summary,
       webItems,
       mediaItems,
+      scrapedItems,
       weatherItems,
       youtubeItems,
       shoppingItems,

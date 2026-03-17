@@ -106,7 +106,7 @@ export class GroqClient {
             tool_choice: options.tools?.length ? ("auto" as any) : undefined,
             temperature: 0.5,
             top_p: 1,
-            max_tokens: 1024,
+            max_tokens: 2048,
             stop: null,
           });
 
@@ -181,7 +181,7 @@ export class GroqClient {
             tool_choice: options.tools?.length ? ("auto" as any) : undefined,
             temperature: 0.5,
             top_p: 1,
-            max_tokens: 1024,
+            max_tokens: 2048,
             stop: null,
             stream: true,
           });
