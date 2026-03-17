@@ -281,9 +281,6 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
     searchQuery?: string;
     webItems?: { link: string; title: string; summaryLines?: string[] }[];
     scrapedItems?: { url: string; title?: string; summary: string }[];
-    youtubeItems?: any[];
-    shoppingItems?: any[];
-    weatherItems?: any[];
   } | null>(null);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const pendingSpeakTextRef = useRef<string | null>(null);
@@ -589,30 +586,18 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                 : m
             )
           );
-          const _webItems = Array.isArray(searchResult.data.webItems)
-            ? searchResult.data.webItems
-            : [];
-          const _scrapedItems = Array.isArray((searchResult.data as any).scrapedItems)
-            ? (searchResult.data as any).scrapedItems
-            : [];
           if (
             !String(searchResult.data.summary ?? "").trim() &&
-            (_webItems.length > 0 || _scrapedItems.length > 0)
+            Array.isArray(searchResult.data.webItems) &&
+            searchResult.data.webItems.length > 0
           ) {
             setPendingStream({
               messageId: responseMessageId,
               type: "search",
               searchQuery: nextPrompt,
-              webItems: _webItems,
-              scrapedItems: _scrapedItems,
-              youtubeItems: Array.isArray((searchResult.data as any).youtubeItems)
-                ? (searchResult.data as any).youtubeItems
-                : [],
-              shoppingItems: Array.isArray((searchResult.data as any).shoppingItems)
-                ? (searchResult.data as any).shoppingItems
-                : [],
-              weatherItems: Array.isArray((searchResult.data as any).weatherItems)
-                ? (searchResult.data as any).weatherItems
+              webItems: searchResult.data.webItems,
+              scrapedItems: Array.isArray((searchResult.data as any).scrapedItems)
+                ? (searchResult.data as any).scrapedItems
                 : [],
             });
           }
@@ -1408,15 +1393,6 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
       const q = String(pendingStream.searchQuery ?? "").trim();
       const items = Array.isArray(pendingStream.webItems) ? pendingStream.webItems : [];
       const scraped = Array.isArray(pendingStream.scrapedItems) ? pendingStream.scrapedItems : [];
-      const youtubeItems = Array.isArray(pendingStream.youtubeItems)
-        ? pendingStream.youtubeItems
-        : [];
-      const shoppingItems = Array.isArray(pendingStream.shoppingItems)
-        ? pendingStream.shoppingItems
-        : [];
-      const weatherItems = Array.isArray(pendingStream.weatherItems)
-        ? pendingStream.weatherItems
-        : [];
       if (!q || (items.length === 0 && scraped.length === 0)) {
         setPendingStream(null);
         return;
@@ -1425,14 +1401,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
         const resp = await fetch("/api/ai/summary-stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            searchQuery: q,
-            webItems: items,
-            scrapedItems: scraped,
-            youtubeItems,
-            shoppingItems,
-            weatherItems,
-          }),
+          body: JSON.stringify({ searchQuery: q, webItems: items, scrapedItems: scraped }),
           signal: controller.signal,
         });
         if (!resp.ok || !resp.body) {
@@ -2252,30 +2221,18 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                 : m
             )
           );
-          const _webItems = Array.isArray(searchResult.data.webItems)
-            ? searchResult.data.webItems
-            : [];
-          const _scrapedItems = Array.isArray((searchResult.data as any).scrapedItems)
-            ? (searchResult.data as any).scrapedItems
-            : [];
           if (
             !String(searchResult.data.summary ?? "").trim() &&
-            (_webItems.length > 0 || _scrapedItems.length > 0)
+            Array.isArray(searchResult.data.webItems) &&
+            searchResult.data.webItems.length > 0
           ) {
             setPendingStream({
               messageId: responseId,
               type: "search",
               searchQuery: effectiveQuery,
-              webItems: _webItems,
-              scrapedItems: _scrapedItems,
-              youtubeItems: Array.isArray((searchResult.data as any).youtubeItems)
-                ? (searchResult.data as any).youtubeItems
-                : [],
-              shoppingItems: Array.isArray((searchResult.data as any).shoppingItems)
-                ? (searchResult.data as any).shoppingItems
-                : [],
-              weatherItems: Array.isArray((searchResult.data as any).weatherItems)
-                ? (searchResult.data as any).weatherItems
+              webItems: searchResult.data.webItems,
+              scrapedItems: Array.isArray((searchResult.data as any).scrapedItems)
+                ? (searchResult.data as any).scrapedItems
                 : [],
             });
           }

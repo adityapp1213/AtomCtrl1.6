@@ -15,29 +15,6 @@ type ScrapedItem = {
   summary?: string;
 };
 
-type YouTubeItem = {
-  id?: string;
-  title?: string;
-  description?: string;
-  channelTitle?: string;
-};
-
-type ShoppingItem = {
-  title?: string;
-  link?: string;
-  priceText?: string;
-  rating?: number | null;
-  reviewCount?: number | null;
-  source?: string;
-  descriptionSnippet?: string;
-};
-
-type WeatherItem = {
-  city?: string;
-  data?: { city?: string; temperature?: number; weatherType?: string; dateTime?: string } | null;
-  error?: string | null;
-};
-
 async function* chunkText(text: string) {
   const parts = text.split(/(\s+)/);
   for (const part of parts) {
@@ -117,20 +94,8 @@ export async function POST(req: Request) {
   const rawScraped = Array.isArray(payload?.scrapedItems)
     ? (payload.scrapedItems as ScrapedItem[])
     : [];
-  const rawYoutube = Array.isArray(payload?.youtubeItems)
-    ? (payload.youtubeItems as YouTubeItem[])
-    : [];
-  const rawShopping = Array.isArray(payload?.shoppingItems)
-    ? (payload.shoppingItems as ShoppingItem[])
-    : [];
-  const rawWeather = Array.isArray(payload?.weatherItems)
-    ? (payload.weatherItems as WeatherItem[])
-    : [];
   const trimmedItems = rawItems.slice(0, 8);
   const trimmedScraped = rawScraped.slice(0, 4);
-  const trimmedYoutube = rawYoutube.slice(0, 4);
-  const trimmedShopping = rawShopping.slice(0, 4);
-  const trimmedWeather = rawWeather.slice(0, 2);
 
   if (!query || (trimmedItems.length === 0 && trimmedScraped.length === 0)) {
     return new Response("", { status: 200 });
@@ -153,66 +118,17 @@ export async function POST(req: Request) {
       notes: String(item.summary ?? ""),
       kind: "scraped",
     })),
-    ...trimmedYoutube.map((item, idx) => {
-      const id = String(item.id ?? "").trim();
-      const link = id ? `https://www.youtube.com/watch?v=${id}` : "";
-      const title = String(item.title ?? "");
-      const channel = String(item.channelTitle ?? "");
-      const desc = String(item.description ?? "");
-      return {
-        index: trimmedItems.length + trimmedScraped.length + idx + 1,
-        title,
-        link,
-        notes: `${channel} ${desc}`.trim(),
-        kind: "youtube",
-      };
-    }),
-    ...trimmedShopping.map((item, idx) => ({
-      index:
-        trimmedItems.length +
-        trimmedScraped.length +
-        trimmedYoutube.length +
-        idx +
-        1,
-      title: String(item.title ?? ""),
-      link: String(item.link ?? ""),
-      notes: [
-        item.priceText ? `price: ${item.priceText}` : "",
-        typeof item.rating === "number" ? `rating: ${item.rating}` : "",
-        typeof item.reviewCount === "number" ? `reviews: ${item.reviewCount}` : "",
-        item.source ? `source: ${item.source}` : "",
-        item.descriptionSnippet ? item.descriptionSnippet : "",
-      ]
-        .filter(Boolean)
-        .join(" "),
-      kind: "shopping",
-    })),
   ].filter((s) => Boolean(s.link));
-
-  const weatherContext = trimmedWeather
-    .map((w) => {
-      const city = String(w?.data?.city ?? w?.city ?? "").trim();
-      const temp =
-        typeof w?.data?.temperature === "number" ? String(w.data.temperature) : "";
-      const type = String(w?.data?.weatherType ?? "").trim();
-      const dt = String(w?.data?.dateTime ?? "").trim();
-      const err = String(w?.error ?? "").trim();
-      if (err) return `city=${city || "N/A"} error=${err}`;
-      return `city=${city || "N/A"} temperature=${temp} weatherType=${type} dateTime=${dt}`.trim();
-    })
-    .filter(Boolean)
-    .join(" | ");
 
   const prompt =
     `User question: ${JSON.stringify(query)}\n` +
-    "Use only the provided sources and tool context.\n" +
+    "Use only the provided sources.\n" +
     "Answer the user's question directly and stay tightly on-topic.\n" +
     "If a specific number/fact is not present in the sources, say that plainly.\n" +
     "Keep it one paragraph and reasonably concise (about 5–8 sentences).\n" +
     "Cite sources inline by embedding the full URL from the source directly in the sentence.\n" +
     "Do not use brackets like [1] or numbered citations.\n" +
     "Do not add headings, bullets, or special characters.\n" +
-    (weatherContext ? `Weather tool context (no URL): ${weatherContext}\n` : "") +
     `Sources: ${JSON.stringify(sourcePayload)}`;
 
   const hasGroqKey = Boolean(process.env.GROQ_API_KEY || process.env.OPEN_AI_API_KEY);
