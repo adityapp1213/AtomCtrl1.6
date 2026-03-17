@@ -280,6 +280,10 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
     text?: string;
     searchQuery?: string;
     webItems?: { link: string; title: string; summaryLines?: string[] }[];
+    scrapedItems?: { url: string; title?: string; summary: string }[];
+    youtubeItems?: any[];
+    shoppingItems?: any[];
+    weatherItems?: any[];
   } | null>(null);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const pendingSpeakTextRef = useRef<string | null>(null);
@@ -308,6 +312,9 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
   const planPillDesktopRef = useRef<HTMLDivElement | null>(null);
   const planPillMobileRef = useRef<HTMLDivElement | null>(null);
   const planConfettiFiredRef = useRef(false);
+  const planProgressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const planFlashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [planPillFlashChecked, setPlanPillFlashChecked] = useState(false);
   const [editTarget, setEditTarget] = useState<ChatMessage | null>(null);
   const [editDraft, setEditDraft] = useState("");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -338,6 +345,30 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
         colors: ["#111827", "#6b7280", "#9ca3af"],
       } as any);
     });
+  }, [currentPlanMeta?.completedCount, currentPlanMeta?.steps.length]);
+
+  useEffect(() => {
+    if (planFlashTimerRef.current) {
+      clearTimeout(planFlashTimerRef.current);
+      planFlashTimerRef.current = null;
+    }
+    if (
+      !currentPlanMeta ||
+      currentPlanMeta.steps.length === 0 ||
+      currentPlanMeta.completedCount <= 0
+    ) {
+      setPlanPillFlashChecked(false);
+      return;
+    }
+    if (currentPlanMeta.completedCount >= currentPlanMeta.steps.length) {
+      setPlanPillFlashChecked(false);
+      return;
+    }
+    setPlanPillFlashChecked(true);
+    planFlashTimerRef.current = setTimeout(() => {
+      setPlanPillFlashChecked(false);
+      planFlashTimerRef.current = null;
+    }, 320);
   }, [currentPlanMeta?.completedCount, currentPlanMeta?.steps.length]);
 
   const handleCopyUserMessage = (msg: ChatMessage) => {
@@ -543,9 +574,6 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
           shoppingLocation,
           planOverride: plan,
         });
-        setCurrentPlanMeta((prev) =>
-          prev ? { ...prev, completedCount: prev.steps.length } : prev
-        );
 
         if (searchResult.type === "search" && searchResult.data) {
           setMessages((prev) =>
@@ -561,6 +589,33 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                 : m
             )
           );
+          const _webItems = Array.isArray(searchResult.data.webItems)
+            ? searchResult.data.webItems
+            : [];
+          const _scrapedItems = Array.isArray((searchResult.data as any).scrapedItems)
+            ? (searchResult.data as any).scrapedItems
+            : [];
+          if (
+            !String(searchResult.data.summary ?? "").trim() &&
+            (_webItems.length > 0 || _scrapedItems.length > 0)
+          ) {
+            setPendingStream({
+              messageId: responseMessageId,
+              type: "search",
+              searchQuery: nextPrompt,
+              webItems: _webItems,
+              scrapedItems: _scrapedItems,
+              youtubeItems: Array.isArray((searchResult.data as any).youtubeItems)
+                ? (searchResult.data as any).youtubeItems
+                : [],
+              shoppingItems: Array.isArray((searchResult.data as any).shoppingItems)
+                ? (searchResult.data as any).shoppingItems
+                : [],
+              weatherItems: Array.isArray((searchResult.data as any).weatherItems)
+                ? (searchResult.data as any).weatherItems
+                : [],
+            });
+          }
 
           if (userId && activeSessionId && basePromptId) {
             const responseArgs = {
@@ -1139,6 +1194,57 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
   const deferChatLoadingRef = useRef(false);
 
   useEffect(() => {
+    const meta = currentPlanMeta;
+    const inProgress =
+      isChatLoading || pendingStream !== null || chatSummaryStatus === "loading";
+    if (!meta || meta.steps.length <= 1 || !inProgress) {
+      if (planProgressTimerRef.current) {
+        clearInterval(planProgressTimerRef.current);
+        planProgressTimerRef.current = null;
+      }
+      return;
+    }
+    if (planProgressTimerRef.current) return;
+    planProgressTimerRef.current = setInterval(() => {
+      setCurrentPlanMeta((prev) => {
+        if (!prev) return prev;
+        const cap = Math.max(0, prev.steps.length - 1);
+        const next = Math.min(prev.completedCount + 1, cap);
+        if (next === prev.completedCount) return prev;
+        return { ...prev, completedCount: next };
+      });
+    }, 900);
+    return () => {
+      if (planProgressTimerRef.current) {
+        clearInterval(planProgressTimerRef.current);
+        planProgressTimerRef.current = null;
+      }
+    };
+  }, [
+    currentPlanMeta?.steps.length,
+    isChatLoading,
+    pendingStream,
+    chatSummaryStatus,
+  ]);
+
+  useEffect(() => {
+    if (!currentPlanMeta || currentPlanMeta.steps.length === 0) return;
+    const inProgress =
+      isChatLoading || pendingStream !== null || chatSummaryStatus === "loading";
+    if (inProgress) return;
+    if (currentPlanMeta.completedCount >= currentPlanMeta.steps.length) return;
+    setCurrentPlanMeta((prev) =>
+      prev ? { ...prev, completedCount: prev.steps.length } : prev
+    );
+  }, [
+    currentPlanMeta?.completedCount,
+    currentPlanMeta?.steps.length,
+    isChatLoading,
+    pendingStream,
+    chatSummaryStatus,
+  ]);
+
+  useEffect(() => {
     const q = (searchQuery || "").trim();
     if (!q) {
       setBootStatus({ query: "", webDone: true, mediaDone: true });
@@ -1301,7 +1407,17 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
 
       const q = String(pendingStream.searchQuery ?? "").trim();
       const items = Array.isArray(pendingStream.webItems) ? pendingStream.webItems : [];
-      if (!q || items.length === 0) {
+      const scraped = Array.isArray(pendingStream.scrapedItems) ? pendingStream.scrapedItems : [];
+      const youtubeItems = Array.isArray(pendingStream.youtubeItems)
+        ? pendingStream.youtubeItems
+        : [];
+      const shoppingItems = Array.isArray(pendingStream.shoppingItems)
+        ? pendingStream.shoppingItems
+        : [];
+      const weatherItems = Array.isArray(pendingStream.weatherItems)
+        ? pendingStream.weatherItems
+        : [];
+      if (!q || (items.length === 0 && scraped.length === 0)) {
         setPendingStream(null);
         return;
       }
@@ -1309,7 +1425,14 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
         const resp = await fetch("/api/ai/summary-stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ searchQuery: q, webItems: items }),
+          body: JSON.stringify({
+            searchQuery: q,
+            webItems: items,
+            scrapedItems: scraped,
+            youtubeItems,
+            shoppingItems,
+            weatherItems,
+          }),
           signal: controller.signal,
         });
         if (!resp.ok || !resp.body) {
@@ -2114,9 +2237,6 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
           shoppingLocation,
           planOverride: plan,
         });
-        setCurrentPlanMeta((prev) =>
-          prev ? { ...prev, completedCount: prev.steps.length } : prev
-        );
 
         if (searchResult.type === "search" && searchResult.data) {
           setMessages((prev) =>
@@ -2132,6 +2252,33 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                 : m
             )
           );
+          const _webItems = Array.isArray(searchResult.data.webItems)
+            ? searchResult.data.webItems
+            : [];
+          const _scrapedItems = Array.isArray((searchResult.data as any).scrapedItems)
+            ? (searchResult.data as any).scrapedItems
+            : [];
+          if (
+            !String(searchResult.data.summary ?? "").trim() &&
+            (_webItems.length > 0 || _scrapedItems.length > 0)
+          ) {
+            setPendingStream({
+              messageId: responseId,
+              type: "search",
+              searchQuery: effectiveQuery,
+              webItems: _webItems,
+              scrapedItems: _scrapedItems,
+              youtubeItems: Array.isArray((searchResult.data as any).youtubeItems)
+                ? (searchResult.data as any).youtubeItems
+                : [],
+              shoppingItems: Array.isArray((searchResult.data as any).shoppingItems)
+                ? (searchResult.data as any).shoppingItems
+                : [],
+              weatherItems: Array.isArray((searchResult.data as any).weatherItems)
+                ? (searchResult.data as any).weatherItems
+                : [],
+            });
+          }
 
           if (userId && activeSessionId) {
             const responseArgs = {
@@ -2873,7 +3020,9 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                               currentPlanMeta.completedCount >=
                               currentPlanMeta.steps.length
                                 ? "/check.png"
-                                : "/pending.png"
+                                : planPillFlashChecked
+                                  ? "/check.png"
+                                  : "/pending.png"
                             }
                             alt={
                               currentPlanMeta.completedCount >=
@@ -2886,8 +3035,12 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                           />
                         </span>
                         <span className="truncate">
-                          {currentPlanMeta.steps[0]?.description ||
-                            "Planning steps"}
+                          {currentPlanMeta.steps[
+                            Math.min(
+                              currentPlanMeta.completedCount,
+                              currentPlanMeta.steps.length - 1
+                            )
+                          ]?.description || "Planning steps"}
                         </span>
                       </div>
                       <div className="ml-3 flex items-center gap-1 text-[0.8rem] tabular-nums">
@@ -2981,7 +3134,9 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                               currentPlanMeta.completedCount >=
                               currentPlanMeta.steps.length
                                 ? "/check.png"
-                                : "/pending.png"
+                                : planPillFlashChecked
+                                  ? "/check.png"
+                                  : "/pending.png"
                             }
                             alt={
                               currentPlanMeta.completedCount >=
@@ -2994,8 +3149,12 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                           />
                         </span>
                         <span className="truncate">
-                          {currentPlanMeta.steps[0]?.description ||
-                            "Planning steps"}
+                          {currentPlanMeta.steps[
+                            Math.min(
+                              currentPlanMeta.completedCount,
+                              currentPlanMeta.steps.length - 1
+                            )
+                          ]?.description || "Planning steps"}
                         </span>
                       </div>
                       <div className="ml-3 flex items-center gap-1 text-[0.8rem] tabular-nums">

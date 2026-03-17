@@ -37,6 +37,7 @@ export type PlannedStep = {
   description: string;
   tool: PlannedTool;
   canRunInParallel: boolean;
+  query?: string;
 };
 
 export type PlanMode = "answer" | "plan";
@@ -215,6 +216,10 @@ const PLANNER_SYSTEM_PROMPT =
   "- scrape_urls should run AFTER web_search when you need deeper detail than snippets, and should NOT be parallel with web_search.\n" +
   "- If the user is trying to find people, jobs, roles, hiring pages, contact info, or other structured details that are usually inside a site page,\n" +
   "  you should plan: web_search → scrape_urls (top 2 links) → answer.\n" +
+  "- For EVERY tool step (except answer), you MUST choose an explicit search/scrape query string in a \"query\" field.\n" +
+  "- In the step description, include the chosen query prefixed with the special marker \"§\" so the user can see what is being searched.\n" +
+  "  Example: {\"tool\":\"web_search\",\"query\":\"annual car production by Toyota\",\"description\":\"Search for production stats § annual car production by Toyota\"}\n" +
+  "- Only the tool step's \"query\" should be used to call tools (not the full user input).\n" +
   "- If the user is asking to explain, rewrite, summarize, or break down something from the conversation (\"explain it\", \"chunk by chunk\", \"what you wrote\"), use answer mode and do NOT use tools.\n" +
   "- If the user asks for a tutorial/guide and the subject is \"it/this/that\" or implied, treat it as a follow-up to the most recent topic in the provided context.\n" +
   "- Use answer alone only for casual chat or when tools are clearly unnecessary.\n" +
@@ -223,7 +228,7 @@ const PLANNER_SYSTEM_PROMPT =
   "- First think step by step about what to do.\n" +
   "- Then return ONLY strict JSON:\n" +
   '  {\"mode\": \"answer\" | \"plan\", \"reasoning\": string, \"steps\": [\n' +
-  '    {\"id\": string, \"description\": string, \"tool\": string, \"canRunInParallel\": boolean}, ...\n' +
+  '    {\"id\": string, \"description\": string, \"tool\": string, \"canRunInParallel\": boolean, \"query\"?: string}, ...\n' +
   "  ]}\n";
 
 export async function planQuerySteps(
@@ -336,11 +341,18 @@ export async function planQuerySteps(
         "scrape_urls",
       ];
       if (!validTools.includes(tool)) return null;
+      const query =
+        typeof s.query === "string"
+          ? s.query.trim()
+          : typeof s.searchQuery === "string"
+            ? s.searchQuery.trim()
+            : "";
       return {
         id: String(s.id || `s${index + 1}`),
         description: String(s.description || "").slice(0, 280),
         tool,
         canRunInParallel: tool === "scrape_urls" ? false : Boolean(s.canRunInParallel),
+        query: query ? query.slice(0, 180) : undefined,
       };
     })
     .filter(Boolean) as PlannedStep[];
@@ -352,6 +364,22 @@ export async function planQuerySteps(
       tool: "answer",
       canRunInParallel: false,
     });
+  }
+
+  const fallbackToolQuery = stripCodeForSearchTopic(trimmed);
+  for (const step of steps) {
+    if (step.tool === "answer") continue;
+    if (!step.query && fallbackToolQuery) {
+      step.query = fallbackToolQuery.slice(0, 180);
+    }
+  }
+
+  for (const step of steps) {
+    if (step.tool === "answer") continue;
+    if (!step.query) continue;
+    if (step.description.includes("§")) continue;
+    const next = `${step.description} § ${step.query}`.trim();
+    step.description = next.length > 280 ? next.slice(0, 280) : next;
   }
 
   if (
@@ -532,7 +560,14 @@ export async function runAgentPlan(
   let youtubeItems: YouTubeVideo[] = [];
   let shoppingItems: ShoppingProduct[] = [];
   let weatherItems: WeatherItem[] = [];
-  let searchQueryForTools = trimmed;
+  const plannerChosenQuery =
+    toolSteps.find((s) => s.tool === "web_search" && s.query)?.query ||
+    toolSteps.find((s) => s.tool === "image_search" && s.query)?.query ||
+    toolSteps.find((s) => s.tool === "youtube_search" && s.query)?.query ||
+    toolSteps.find((s) => s.tool === "shopping_search" && s.query)?.query ||
+    toolSteps.find((s) => s.tool === "weather_city" && s.query)?.query ||
+    "";
+  let searchQueryForTools = plannerChosenQuery || stripCodeForSearchTopic(trimmed);
   const explicitUrls = extractUrlsFromText(trimmed);
 
   const looksReferential = /\b(it|this|that|these|those|them|again|same|one)\b/i.test(
@@ -552,38 +587,21 @@ export async function runAgentPlan(
     searchQueryForTools = followupTopic;
   }
 
-  if (
-    !followupTopic &&
-    (needsWeb ||
-      needsImages ||
-      needsYoutube ||
-      needsShopping ||
-      needsWeather ||
-      needsScrape)
-  ) {
-    try {
-      const intent = await detectIntent(trimmed, contextLines, aiProvider);
-      const candidate =
-        (intent.searchQuery ?? intent.webSearchQuery ?? "").trim();
-      if (candidate) {
-        searchQueryForTools = candidate;
-      }
-    } catch {
-    }
+  if (!followupTopic && plannerChosenQuery) {
+    searchQueryForTools = plannerChosenQuery;
   }
 
+  const hasScrapeStep = toolSteps.some((s) => s.tool === "scrape_urls");
+  const scrapeDependsOnWebItems = hasScrapeStep && explicitUrls.length === 0;
+  const phase1 = scrapeDependsOnWebItems
+    ? toolSteps.filter((s) => s.tool !== "scrape_urls")
+    : toolSteps;
+  const phase2 = scrapeDependsOnWebItems
+    ? toolSteps.filter((s) => s.tool === "scrape_urls")
+    : [];
   const batches: PlannedStep[][] = [];
-  let currentBatch: PlannedStep[] = [];
-  for (const step of toolSteps) {
-    if (step.canRunInParallel) {
-      currentBatch.push(step);
-    } else {
-      if (currentBatch.length) batches.push(currentBatch);
-      currentBatch = [];
-      batches.push([step]);
-    }
-  }
-  if (currentBatch.length) batches.push(currentBatch);
+  if (phase1.length) batches.push(phase1);
+  for (const s of phase2) batches.push([s]);
 
   const queryForTool = (tool: PlannedTool) => {
     if (!followupTopic) return searchQueryForTools;
@@ -593,8 +611,9 @@ export async function runAgentPlan(
     return followupTopic;
   };
 
-  const runTool = async (tool: PlannedTool) => {
-    const toolQuery = queryForTool(tool);
+  const runTool = async (step: PlannedStep) => {
+    const tool = step.tool;
+    const toolQuery = step.query?.trim() ? step.query.trim() : queryForTool(tool);
     switch (tool) {
       case "web_search":
         return { tool, value: await webSearch(toolQuery) };
@@ -656,7 +675,7 @@ export async function runAgentPlan(
   let weatherItem: any = null;
 
   for (const batch of batches) {
-    const results = await Promise.all(batch.map((s) => runTool(s.tool)));
+    const results = await Promise.all(batch.map((s) => runTool(s)));
     for (const r of results) {
       if (r.tool === "web_search" && Array.isArray(r.value)) rawWebItems = r.value;
       if (r.tool === "image_search" && Array.isArray(r.value)) rawMedia = r.value;
@@ -709,17 +728,10 @@ export async function runAgentPlan(
   const hasShopping = shoppingItems.length > 0;
 
   if (Array.isArray(rawWebItems) && rawWebItems.length > 0) {
-    const s = await summarizeItems(rawWebItems, searchQueryForTools, aiProvider);
-    if (s.overallSummaryLines.length > 0) {
-      overallSummaryLines = s.overallSummaryLines;
-    }
-    webItems = rawWebItems.map((it: any, idx: number) => {
-      const found = s.summaries.find((x) => x.index === idx);
-      const lines =
-        Array.isArray(found?.summary_lines) && found.summary_lines.length
-          ? found.summary_lines.slice(0, 3)
-          : [it.snippet || ""].filter(Boolean).slice(0, 1);
-      const normalized = [lines[0] ?? "", lines[1] ?? "", lines[2] ?? ""];
+    overallSummaryLines = [];
+    webItems = rawWebItems.map((it: any) => {
+      const snippet = String(it?.snippet || "").trim();
+      const normalized = [snippet, "", ""];
       return {
         link: it.link,
         title: it.title,
@@ -727,11 +739,7 @@ export async function runAgentPlan(
         imageUrl: it.imageUrl,
       };
     });
-    summary = await summarizeChatAnswerFromWebItems(
-      webItems,
-      searchQueryForTools,
-      aiProvider
-    );
+    summary = null;
   } else if (scrapedItems.length > 0) {
     if (rawScrapeAnswer.trim()) {
       summary = rawScrapeAnswer.trim();
@@ -772,7 +780,7 @@ export async function runAgentPlan(
       weatherItems,
       youtubeItems,
       shoppingItems,
-      shouldShowTabs: false,
+      shouldShowTabs: true,
       mapLocation: undefined,
       googleMapsKey: process.env.GOOGLE_MAP_API_KEY,
     },
