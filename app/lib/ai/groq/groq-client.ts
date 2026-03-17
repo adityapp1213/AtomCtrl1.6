@@ -136,8 +136,15 @@ export class GroqClient {
 
           const retryable =
             status === 429 ||
+            status === 500 ||
+            status === 502 ||
             status === 503 ||
+            status === 504 ||
             lower.includes("timeout") ||
+            lower.includes("fetch failed") ||
+            lower.includes("network") ||
+            lower.includes("socket hang up") ||
+            lower.includes("econnreset") ||
             lower.includes("temporarily unavailable") ||
             lower.includes("rate limit");
 
@@ -202,8 +209,15 @@ export class GroqClient {
 
           const retryable =
             status === 429 ||
+            status === 500 ||
+            status === 502 ||
             status === 503 ||
+            status === 504 ||
             lower.includes("timeout") ||
+            lower.includes("fetch failed") ||
+            lower.includes("network") ||
+            lower.includes("socket hang up") ||
+            lower.includes("econnreset") ||
             lower.includes("temporarily unavailable") ||
             lower.includes("rate limit");
 

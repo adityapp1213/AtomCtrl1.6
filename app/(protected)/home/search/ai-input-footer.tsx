@@ -187,6 +187,61 @@ function normalizeSummaryText(value: string) {
     .trim();
 }
 
+const DEFAULT_FALLBACK_ANSWER =
+  "I could not generate a full answer just now. Please try again or refine your question.";
+
+function buildSearchFallbackAnswer(
+  searchResult: DynamicSearchResult,
+  query: string
+) {
+  const data = searchResult.data;
+  if (data) {
+    const summaryText = (data.summary ?? "").toString().trim();
+    if (summaryText) return summaryText;
+
+    const lines = Array.isArray(data.overallSummaryLines)
+      ? data.overallSummaryLines.filter(Boolean)
+      : [];
+    if (lines.length) return lines.join(" ");
+
+    const firstWeb =
+      Array.isArray(data.webItems) && data.webItems.length > 0
+        ? data.webItems[0]
+        : null;
+    if (firstWeb) {
+      const fromWeb =
+        (firstWeb.summaryLines || []).find(
+          (line) => line && line.trim().length > 0
+        ) ||
+        firstWeb.title ||
+        firstWeb.link;
+      if (fromWeb) return String(fromWeb);
+    }
+
+    if (Array.isArray(data.youtubeItems) && data.youtubeItems.length > 0) {
+      const q = query.trim();
+      if (q) return `I found some videos related to "${q}" above.`;
+      return "I found some videos related to this topic above.";
+    }
+
+    if (Array.isArray(data.shoppingItems) && data.shoppingItems.length > 0) {
+      const q = query.trim();
+      if (q) return `I found some products related to "${q}" above.`;
+      return "I found some products related to this topic above.";
+    }
+  }
+
+  const contentText = (searchResult.content || "").toString().trim();
+  if (contentText) return contentText;
+
+  const safeQuery = query.trim();
+  if (safeQuery) {
+    return `I could not generate a full answer, but the results above are relevant to "${safeQuery}".`;
+  }
+
+  return DEFAULT_FALLBACK_ANSWER;
+}
+
 export function AIInputFooter({
   onSubmit,
   inputValue,
@@ -281,6 +336,9 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
     searchQuery?: string;
     webItems?: { link: string; title: string; summaryLines?: string[] }[];
     scrapedItems?: { url: string; title?: string; summary: string }[];
+    youtubeItems?: { id: string; title: string; description: string; channelTitle: string }[];
+    shoppingItems?: { title: string; link: string; priceText?: string; rating?: number | null; reviewCount?: number | null }[];
+    weatherItems?: { city: string; data?: { city: string; temperature: number; weatherType: string; dateTime: string; isDay: boolean } | null; error?: string | null }[];
   } | null>(null);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const pendingSpeakTextRef = useRef<string | null>(null);
@@ -474,8 +532,9 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
     setChatLoadingQuery(nextPrompt);
     setActiveInputSource("text");
 
+    let contextInputs: string[] = [];
     try {
-      const contextInputs = [...messages]
+      contextInputs = [...messages]
         .filter((m) => {
           const hasContent =
             typeof m.content === "string" && m.content.trim().length > 0;
@@ -531,8 +590,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
       if (mode === "answer") {
         const answer = await answerQueryDirect(nextPrompt, contextInputs);
         const finalAnswer =
-          (answer || "").trim() ||
-          "I am not able to generate a useful answer right now.";
+          (answer || "").trim() || DEFAULT_FALLBACK_ANSWER;
 
         setPendingStream({
           messageId: responseMessageId,
@@ -586,11 +644,9 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                 : m
             )
           );
-          if (
-            !String(searchResult.data.summary ?? "").trim() &&
-            Array.isArray(searchResult.data.webItems) &&
-            searchResult.data.webItems.length > 0
-          ) {
+          const hasWeb = Array.isArray(searchResult.data.webItems) && searchResult.data.webItems.length > 0;
+          const hasScraped = Array.isArray((searchResult.data as any).scrapedItems) && (searchResult.data as any).scrapedItems.length > 0;
+          if (!String(searchResult.data.summary ?? "").trim() && (hasWeb || hasScraped)) {
             setPendingStream({
               messageId: responseMessageId,
               type: "search",
@@ -598,6 +654,15 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
               webItems: searchResult.data.webItems,
               scrapedItems: Array.isArray((searchResult.data as any).scrapedItems)
                 ? (searchResult.data as any).scrapedItems
+                : [],
+              youtubeItems: Array.isArray((searchResult.data as any).youtubeItems)
+                ? (searchResult.data as any).youtubeItems
+                : [],
+              shoppingItems: Array.isArray((searchResult.data as any).shoppingItems)
+                ? (searchResult.data as any).shoppingItems
+                : [],
+              weatherItems: Array.isArray((searchResult.data as any).weatherItems)
+                ? (searchResult.data as any).weatherItems
                 : [],
             });
           }
@@ -626,9 +691,10 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
             }
           }
         } else {
-          const fallbackAnswer =
-            (searchResult.content || "").toString().trim() ||
-            "I am not able to generate a useful answer right now.";
+          const fallbackAnswer = buildSearchFallbackAnswer(
+            searchResult,
+            nextPrompt
+          );
           setPendingStream({
             messageId: responseMessageId,
             type: "text",
@@ -665,16 +731,13 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
         );
       }
     } catch {
+      const fallback =
+        (await answerQueryDirect(nextPrompt, contextInputs).catch(() => "")) ||
+        DEFAULT_FALLBACK_ANSWER;
+      setPendingStream({ messageId: responseMessageId, type: "text", text: fallback });
       setMessages((prev) =>
         prev.map((m) =>
-          m.id === responseMessageId
-            ? {
-                ...m,
-                role: "assistant",
-                content:
-                  "There was an error processing your request. Please try again.",
-              }
-            : m
+          m.id === responseMessageId ? { ...m, role: "assistant", content: fallback } : m
         )
       );
     } finally {
@@ -1393,7 +1456,10 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
       const q = String(pendingStream.searchQuery ?? "").trim();
       const items = Array.isArray(pendingStream.webItems) ? pendingStream.webItems : [];
       const scraped = Array.isArray(pendingStream.scrapedItems) ? pendingStream.scrapedItems : [];
-      if (!q || (items.length === 0 && scraped.length === 0)) {
+      const yt = Array.isArray(pendingStream.youtubeItems) ? pendingStream.youtubeItems : [];
+      const shop = Array.isArray(pendingStream.shoppingItems) ? pendingStream.shoppingItems : [];
+      const weather = Array.isArray(pendingStream.weatherItems) ? pendingStream.weatherItems : [];
+      if (!q || (items.length === 0 && scraped.length === 0 && yt.length === 0 && shop.length === 0 && weather.length === 0)) {
         setPendingStream(null);
         return;
       }
@@ -1401,7 +1467,14 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
         const resp = await fetch("/api/ai/summary-stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ searchQuery: q, webItems: items, scrapedItems: scraped }),
+          body: JSON.stringify({
+            searchQuery: q,
+            webItems: items,
+            scrapedItems: scraped,
+            youtubeItems: yt,
+            shoppingItems: shop,
+            weatherItems: weather,
+          }),
           signal: controller.signal,
         });
         if (!resp.ok || !resp.body) {
@@ -2050,6 +2123,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
       }
     }
 
+    let contextInputs: string[] = [];
     try {
       const shouldBuildMemoryWindow = userId && activeSessionId && recentMessages.length > 0;
 
@@ -2110,6 +2184,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
         })();
       }
 
+      contextInputs = [];
       let baseContext: string[] = [];
       if (structuredContext) {
         baseContext = [`AskCloudyContext: ${structuredContext}`];
@@ -2122,7 +2197,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
           baseContext.push(`ConversationContext: ${structuredConversationContext}`);
         }
       }
-      const contextInputs = [
+      contextInputs = [
         ...baseContext,
         `User: ${trimmed.slice(0, 800)}`,
         effectiveQuery !== trimmed ? `EffectiveQuery: ${effectiveQuery}` : "",
@@ -2162,8 +2237,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
       if (mode === "answer") {
         const answer = await answerQueryDirect(trimmed, contextInputs);
         const finalAnswer =
-          (answer || "").trim() ||
-          "I am not able to generate a useful answer right now.";
+          (answer || "").trim() || DEFAULT_FALLBACK_ANSWER;
 
         setPendingStream({
           messageId: responseId,
@@ -2221,11 +2295,9 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                 : m
             )
           );
-          if (
-            !String(searchResult.data.summary ?? "").trim() &&
-            Array.isArray(searchResult.data.webItems) &&
-            searchResult.data.webItems.length > 0
-          ) {
+          const hasWeb = Array.isArray(searchResult.data.webItems) && searchResult.data.webItems.length > 0;
+          const hasScraped = Array.isArray((searchResult.data as any).scrapedItems) && (searchResult.data as any).scrapedItems.length > 0;
+          if (!String(searchResult.data.summary ?? "").trim() && (hasWeb || hasScraped)) {
             setPendingStream({
               messageId: responseId,
               type: "search",
@@ -2233,6 +2305,15 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
               webItems: searchResult.data.webItems,
               scrapedItems: Array.isArray((searchResult.data as any).scrapedItems)
                 ? (searchResult.data as any).scrapedItems
+                : [],
+              youtubeItems: Array.isArray((searchResult.data as any).youtubeItems)
+                ? (searchResult.data as any).youtubeItems
+                : [],
+              shoppingItems: Array.isArray((searchResult.data as any).shoppingItems)
+                ? (searchResult.data as any).shoppingItems
+                : [],
+              weatherItems: Array.isArray((searchResult.data as any).weatherItems)
+                ? (searchResult.data as any).weatherItems
                 : [],
             });
           }
@@ -2262,9 +2343,10 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
             }
           }
         } else {
-          const fallbackAnswer =
-            (searchResult.content || "").toString().trim() ||
-            "I am not able to generate a useful answer right now.";
+          const fallbackAnswer = buildSearchFallbackAnswer(
+            searchResult,
+            effectiveQuery
+          );
 
           setPendingStream({
             messageId: responseId,
@@ -2313,14 +2395,17 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
     } catch (err) {
       deferChatLoadingRef.current = false;
       pendingSpeakShouldSpeakRef.current = false;
-      pendingSpeakTextRef.current = "There was an error processing your request. Please try again.";
+      const fallback =
+        (await answerQueryDirect(trimmed, contextInputs).catch(() => "")) ||
+        DEFAULT_FALLBACK_ANSWER;
+      pendingSpeakTextRef.current = fallback;
       setMessages((prev) =>
         prev.map((m) =>
           m.id === responseId
             ? {
                 ...m,
                 role: "assistant",
-                content: "There was an error processing your request. Please try again.",
+                content: fallback,
               }
             : m
         )

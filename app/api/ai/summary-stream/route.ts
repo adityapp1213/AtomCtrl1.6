@@ -15,6 +15,33 @@ type ScrapedItem = {
   summary?: string;
 };
 
+type YouTubeItem = {
+  id?: string;
+  title?: string;
+  description?: string;
+  channelTitle?: string;
+};
+
+type ShoppingItem = {
+  title?: string;
+  link?: string;
+  priceText?: string;
+  rating?: number | null;
+  reviewCount?: number | null;
+};
+
+type WeatherItem = {
+  city?: string;
+  data?: {
+    city: string;
+    temperature: number;
+    weatherType: string;
+    dateTime: string;
+    isDay: boolean;
+  } | null;
+  error?: string | null;
+};
+
 async function* chunkText(text: string) {
   const parts = text.split(/(\s+)/);
   for (const part of parts) {
@@ -94,10 +121,29 @@ export async function POST(req: Request) {
   const rawScraped = Array.isArray(payload?.scrapedItems)
     ? (payload.scrapedItems as ScrapedItem[])
     : [];
+  const rawYoutube = Array.isArray(payload?.youtubeItems)
+    ? (payload.youtubeItems as YouTubeItem[])
+    : [];
+  const rawShopping = Array.isArray(payload?.shoppingItems)
+    ? (payload.shoppingItems as ShoppingItem[])
+    : [];
+  const rawWeather = Array.isArray(payload?.weatherItems)
+    ? (payload.weatherItems as WeatherItem[])
+    : [];
   const trimmedItems = rawItems.slice(0, 8);
   const trimmedScraped = rawScraped.slice(0, 4);
+  const trimmedYoutube = rawYoutube.slice(0, 4);
+  const trimmedShopping = rawShopping.slice(0, 4);
+  const trimmedWeather = rawWeather.slice(0, 2);
 
-  if (!query || (trimmedItems.length === 0 && trimmedScraped.length === 0)) {
+  if (
+    !query ||
+    (trimmedItems.length === 0 &&
+      trimmedScraped.length === 0 &&
+      trimmedYoutube.length === 0 &&
+      trimmedShopping.length === 0 &&
+      trimmedWeather.length === 0)
+  ) {
     return new Response("", { status: 200 });
   }
 
@@ -117,6 +163,41 @@ export async function POST(req: Request) {
       link: String(item.url ?? ""),
       notes: String(item.summary ?? ""),
       kind: "scraped",
+    })),
+    ...trimmedYoutube.map((item, idx) => ({
+      index: trimmedItems.length + trimmedScraped.length + idx + 1,
+      title: String(item.title ?? ""),
+      link: item.id ? `https://www.youtube.com/watch?v=${String(item.id)}` : "",
+      notes: `${String(item.channelTitle ?? "")} ${String(item.description ?? "")}`.trim(),
+      kind: "youtube",
+    })),
+    ...trimmedShopping.map((item, idx) => ({
+      index: trimmedItems.length + trimmedScraped.length + trimmedYoutube.length + idx + 1,
+      title: String(item.title ?? ""),
+      link: String(item.link ?? ""),
+      notes: [
+        String(item.priceText ?? ""),
+        item.rating != null ? `rating ${item.rating}` : "",
+        item.reviewCount != null ? `${item.reviewCount} reviews` : "",
+      ]
+        .filter(Boolean)
+        .join(", "),
+      kind: "shopping",
+    })),
+    ...trimmedWeather.map((item, idx) => ({
+      index:
+        trimmedItems.length +
+        trimmedScraped.length +
+        trimmedYoutube.length +
+        trimmedShopping.length +
+        idx +
+        1,
+      title: String(item.city ?? ""),
+      link: "https://openweathermap.org/",
+      notes: item.data
+        ? `${item.data.city}: ${item.data.temperature}°C, ${item.data.weatherType} (${item.data.dateTime})`
+        : String(item.error ?? ""),
+      kind: "weather",
     })),
   ].filter((s) => Boolean(s.link));
 

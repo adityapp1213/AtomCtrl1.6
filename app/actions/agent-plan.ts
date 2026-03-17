@@ -489,7 +489,7 @@ export async function answerQueryDirect(
 
   const raw = String(result?.text || "").trim();
   if (!raw) {
-    return "I am not able to generate a useful answer right now.";
+    return "I could not generate a full answer just now. Please try again or refine your question.";
   }
   const normalized = raw
     .replace(/\r\n/g, "\n")
