@@ -73,36 +73,7 @@ async function firecrawlScrapeMarkdown(
   url: string
 ): Promise<{ markdown: string; title?: string; summary?: string } | null> {
   const apiKey = process.env.FIRECRAWL_API_KEY;
-  if (!apiKey) {
-    // Fallback: try to fetch the page directly and extract basic text
-    try {
-      const response = await fetch(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (compatible; WebScraper/1.0)',
-        },
-        signal: AbortSignal.timeout(10000),
-      });
-      if (!response.ok) return null;
-      const html = await response.text();
-      // Extract title
-      const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
-      const title = titleMatch ? titleMatch[1].trim() : undefined;
-      // Extract basic text content (very basic fallback)
-      const textContent = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .slice(0, 2000);
-      return {
-        markdown: textContent || "Unable to extract content from this page.",
-        title,
-        summary: textContent ? `Basic text extracted from ${url}` : undefined
-      };
-    } catch {
-      return null;
-    }
-  }
+  if (!apiKey) return null;
 
   const normalized = normalizeHttpUrl(url);
   if (!normalized) return null;
@@ -128,35 +99,7 @@ async function firecrawlScrapeMarkdown(
       signal: controller.signal,
     });
 
-    if (!res.ok) {
-      // If Firecrawl fails, try basic fetch fallback
-      try {
-        const response = await fetch(normalized, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (compatible; WebScraper/1.0)',
-          },
-          signal: AbortSignal.timeout(10000),
-        });
-        if (!response.ok) return null;
-        const html = await response.text();
-        const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
-        const title = titleMatch ? titleMatch[1].trim() : undefined;
-        const textContent = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-          .replace(/<[^>]+>/g, ' ')
-          .replace(/\s+/g, ' ')
-          .trim()
-          .slice(0, 2000);
-        return {
-          markdown: textContent || "Unable to extract content from this page.",
-          title,
-          summary: textContent ? `Basic text extracted from ${url}` : undefined
-        };
-      } catch {
-        return null;
-      }
-    }
-
+    if (!res.ok) return null;
     const json: any = await res.json();
     if (!json || json.success !== true || !json.data) return null;
 
@@ -327,42 +270,31 @@ export async function scrapeUrls(params: {
     summary?: string;
   }[];
 
-  let items: ScrapedUrlSummary[] = [];
-
-  if (validPages.length > 0) {
-    items = (
-      await Promise.all(
-        validPages.map(async (p) => {
-          const summaryText = (p.summary || "").toString().trim();
-          if (summaryText) {
-            return { url: p.url, title: p.title, summary: summaryText } satisfies ScrapedUrlSummary;
-          }
-          const llmSummary = await summarizeScrapedMarkdown({
-            url: p.url,
-            title: p.title,
-            markdown: p.markdown,
-            query: params.query,
-            providerOverride: params.providerOverride,
-          });
-          return { url: p.url, title: p.title, summary: llmSummary } satisfies ScrapedUrlSummary;
-        })
-      )
-    ).filter(Boolean) as ScrapedUrlSummary[];
-  } else if (unique.length > 0) {
-    // If we had URLs to scrape but all failed, return an error message
-    items = [{
-      url: unique[0],
-      title: "Scraping Error",
-      summary: "Unable to scrape the requested URLs. The scraping service may be unavailable or the URLs may not be accessible."
-    }];
-  }
+  const items = (
+    await Promise.all(
+      validPages.map(async (p) => {
+        const summaryText = (p.summary || "").toString().trim();
+        if (summaryText) {
+          return { url: p.url, title: p.title, summary: summaryText } satisfies ScrapedUrlSummary;
+        }
+        const llmSummary = await summarizeScrapedMarkdown({
+          url: p.url,
+          title: p.title,
+          markdown: p.markdown,
+          query: params.query,
+          providerOverride: params.providerOverride,
+        });
+        return { url: p.url, title: p.title, summary: llmSummary } satisfies ScrapedUrlSummary;
+      })
+    )
+  ).filter(Boolean) as ScrapedUrlSummary[];
 
   if (params.mode === "answer") {
-    const answer = validPages.length > 0 ? await answerFromScrapedPages({
+    const answer = await answerFromScrapedPages({
       pages: validPages,
       query: params.query,
       providerOverride: params.providerOverride,
-    }) : "I was unable to scrape the requested URLs to provide a detailed answer.";
+    });
     return { items, answer: answer || undefined };
   }
 
