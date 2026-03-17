@@ -46,9 +46,24 @@ function inferRetryDelayMs(err: unknown, fallbackMs: number) {
   }
 
   const msg = String(anyErr?.message ?? "");
-  const m = msg.match(/retry in\s+(\d+(?:\.\d+)?)s/i);
-  if (m?.[1]) {
-    const seconds = Number(m[1]);
+  const mWithMinutes = msg.match(/retry in\s+(\d+)m(\d+(?:\.\d+)?)s/i);
+  if (mWithMinutes?.[1] && mWithMinutes?.[2]) {
+    const minutes = Number(mWithMinutes[1]);
+    const seconds = Number(mWithMinutes[2]);
+    if (
+      Number.isFinite(minutes) &&
+      minutes >= 0 &&
+      Number.isFinite(seconds) &&
+      seconds >= 0
+    ) {
+      const totalSeconds = minutes * 60 + seconds;
+      return Math.ceil(totalSeconds * 1000);
+    }
+  }
+
+  const mSecondsOnly = msg.match(/retry in\s+(\d+(?:\.\d+)?)s/i);
+  if (mSecondsOnly?.[1]) {
+    const seconds = Number(mSecondsOnly[1]);
     if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1000);
   }
 
@@ -58,10 +73,12 @@ function inferRetryDelayMs(err: unknown, fallbackMs: number) {
 export class GroqClient {
   private static instance: GroqClient;
   private apiKeys: string[];
+  private rateLimitedUntilMs: number | null;
 
   private constructor() {
     const keys = [process.env.GROQ_API_KEY, process.env.OPEN_AI_API_KEY].filter(Boolean) as string[];
     this.apiKeys = [...new Set(keys.map((k) => k.trim()))].filter((k) => k.length > 0);
+    this.rateLimitedUntilMs = null;
 
     if (this.apiKeys.length === 0) {
       console.warn("[GroqClient] Missing GROQ_API_KEY/OPEN_AI_API_KEY");
@@ -94,6 +111,14 @@ export class GroqClient {
 
     let lastError: unknown = null;
 
+    if (this.rateLimitedUntilMs && Date.now() < this.rateLimitedUntilMs) {
+      const remainingMs = this.rateLimitedUntilMs - Date.now();
+      const seconds = Math.max(1, Math.ceil(remainingMs / 1000));
+      throw new Error(
+        `[GroqClient] Rate limit in effect; please try again in ${seconds}s`
+      );
+    }
+
     for (const key of this.apiKeys) {
       const client = this.getClient(key);
 
@@ -110,10 +135,8 @@ export class GroqClient {
             stop: null,
           });
 
-          const msg = completion.choices?.[0]?.message;
-          const text = msg?.content ?? "";
-
           const functionCalls: ToolCall[] = [];
+          const msg = completion.choices?.[0]?.message;
           const toolCalls = (msg as unknown as { tool_calls?: Array<{ function?: { name?: string; arguments?: string } }> })
             ?.tool_calls;
 
@@ -126,15 +149,61 @@ export class GroqClient {
             }
           }
 
+          const rawContent = (msg as unknown as { content?: unknown })?.content;
+          let text = "";
+          if (typeof rawContent === "string") {
+            text = rawContent;
+          } else if (Array.isArray(rawContent)) {
+            text = rawContent
+              .map((part: any) => {
+                if (typeof part?.text === "string") return part.text;
+                return "";
+              })
+              .join("");
+          } else if (rawContent != null) {
+            text = String(rawContent);
+          }
+
+          if (!String(text || "").trim()) {
+            console.error("[GroqClient] Empty completion content", {
+              model,
+              hasToolCalls: Array.isArray(toolCalls) && toolCalls.length > 0,
+            });
+            throw new Error("[GroqClient] Model returned empty content");
+          }
+
           return { text, functionCalls };
         } catch (err) {
           lastError = err;
-          const anyErr = err as unknown as { status?: number; message?: string };
-          const status = anyErr?.status;
+          const anyErr = err as unknown as {
+            status?: number;
+            message?: string;
+            response?: { status?: number; data?: unknown };
+          };
+          const status = anyErr?.status ?? anyErr?.response?.status;
           const message = String(anyErr?.message ?? "");
           const lower = message.toLowerCase();
 
-          const retryable =
+          let errorPayload: any =
+            (anyErr as any)?.response?.data && typeof (anyErr as any).response?.data === "object"
+              ? (anyErr as any).response?.data
+              : undefined;
+          if (!errorPayload && message.trim().startsWith("{")) {
+            errorPayload = safeJsonParse(message);
+          }
+
+          const errorCode =
+            errorPayload?.error?.code ?? errorPayload?.code ?? null;
+          const errorMessage =
+            errorPayload?.error?.message ??
+            errorPayload?.message ??
+            message;
+
+          const isDailyRateLimit =
+            errorCode === "rate_limit_exceeded" &&
+            /tokens per day/i.test(String(errorMessage || ""));
+
+          let retryable =
             status === 429 ||
             status === 500 ||
             status === 502 ||
@@ -148,8 +217,20 @@ export class GroqClient {
             lower.includes("temporarily unavailable") ||
             lower.includes("rate limit");
 
+          if (isDailyRateLimit) {
+            retryable = false;
+            const waitMs = inferRetryDelayMs(
+              err,
+              5 * 60 * 1000
+            );
+            this.rateLimitedUntilMs = Date.now() + waitMs;
+          }
+
           if (retryable && attempt < MAX_RETRIES) {
-            const delay = inferRetryDelayMs(err, INITIAL_RETRY_DELAY * Math.pow(2, attempt - 1));
+            const delay = inferRetryDelayMs(
+              err,
+              INITIAL_RETRY_DELAY * Math.pow(2, attempt - 1)
+            );
             await new Promise((r) => setTimeout(r, delay));
             continue;
           }

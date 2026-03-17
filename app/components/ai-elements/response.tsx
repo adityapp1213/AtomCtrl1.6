@@ -201,20 +201,20 @@ const components: Options['components'] = {
   },
   ol: ({ node, children, className, ...props }) => (
     <ol
-      className={cn('my-0.5 ml-4 list-outside list-decimal', className)}
+      className={cn('my-0.5 ml-4 list-outside list-decimal space-y-1', className)}
       {...(props as any)}
     >
       {children}
     </ol>
   ),
   li: ({ node, children, className, ...props }) => (
-    <li className={cn('py-0.5', className)} {...(props as any)}>
+    <li className={cn('', className)} {...(props as any)}>
       {children}
     </li>
   ),
   ul: ({ node, children, className, ...props }) => (
     <ul
-      className={cn('my-0.5 ml-4 list-outside list-disc', className)}
+      className={cn('my-0.5 ml-4 list-outside list-disc space-y-1', className)}
       {...(props as any)}
     >
       {children}

@@ -134,21 +134,29 @@ export function SearchResultsBlock({
     (displayText || "").trim() ||
     overallSummaryLines.filter(Boolean).join("\n").trim() ||
     (fallbackFromSources || "").trim();
-  const answerParts = (() => {
+  const formattedAnswerMarkdown = useMemo(() => {
     const raw = String(fullAnswerText || "").trim();
-    if (!raw) return { top: "", bottom: "" };
-    const paragraphs = raw.split(/\n\s*\n/).filter(Boolean);
-    if (paragraphs.length >= 2) {
-      return { top: paragraphs[0], bottom: paragraphs.slice(1).join("\n\n") };
+    if (!raw) return "";
+    const q = (searchQuery || "").trim();
+    const isQuestionLike =
+      /\?/.test(q) ||
+      /\b(what|who|when|where|why|how|explain|tell me|describe|give me)\b/i.test(
+        q
+      );
+    const heading = isQuestionLike && q
+      ? `### Answer\n\n**Question:** ${q}\n\n`
+      : "### Summary\n\n";
+    const parts = raw
+      .split(/[.!?]\s+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (parts.length <= 2) {
+      return heading + raw;
     }
-    const words = raw.split(/\s+/).filter(Boolean);
-    if (words.length <= 1) return { top: raw, bottom: raw };
-    const splitIndex = Math.ceil(words.length / 2);
-    return {
-      top: words.slice(0, splitIndex).join(" "),
-      bottom: words.slice(splitIndex).join(" "),
-    };
-  })();
+    const [intro, ...rest] = parts;
+    const bullets = rest.map((s) => `- ${s}`).join("\n");
+    return `${heading}${intro}\n\n#### Key points\n\n${bullets}`;
+  }, [fullAnswerText, searchQuery]);
 
   const chatMediaItems = mediaItems
     .map((item) => ({ ...item, src: normalizeExternalUrl(item.src) }))
@@ -244,6 +252,15 @@ export function SearchResultsBlock({
         item.summaryLines.find((l) => l && l.trim().length > 0) || "",
     }));
   }, [webItems]);
+
+  const sourcesMarkdown = useMemo(() => {
+    if (!sources.length) return "";
+    const lines = sources.map((s) => {
+      const label = s.title || formatDisplayUrl(s.url);
+      return `- [${label}](${s.url})`;
+    });
+    return ["#### Sources", "", ...lines].join("\n");
+  }, [sources]);
 
   const triggerSources = useMemo(() => {
     return sources.map((s) => {
@@ -394,7 +411,7 @@ export function SearchResultsBlock({
         {fullAnswerText ? (
           <div className="text-sm">
             {renderSummaryWithCitations(
-              summaryIsStreaming ? fullAnswerText : answerParts.top
+              summaryIsStreaming ? fullAnswerText : formattedAnswerMarkdown
             )}
           </div>
         ) : (
@@ -454,10 +471,15 @@ export function SearchResultsBlock({
       )}
 
       {/* Response (bottom) */}
-      {!summaryIsStreaming && answerParts.bottom && (
+      {!summaryIsStreaming && sourcesMarkdown && (
         <div className="space-y-3">
           <div className="text-sm">
-            {renderSummaryWithCitations(answerParts.bottom)}
+            <Response
+              className="text-sm leading-relaxed"
+              parseIncompleteMarkdown
+            >
+              {sourcesMarkdown}
+            </Response>
           </div>
         </div>
       )}

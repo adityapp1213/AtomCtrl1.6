@@ -157,9 +157,35 @@ function isUrlSummaryOnlyRequest(query: string) {
 
 function extractFollowupTopic(contextLines: string[], query: string) {
   const ctx = extractConversationContextObject(contextLines);
+  const lowerQuery = String(query || "").toLowerCase();
+
+  const isEditingRequest =
+    /\b(shorter|shorten|summarize|summarise|summary|condense|simpler|more concise|rewrite|rephrase|clean up|format|structure|tidy up)\b/.test(
+      lowerQuery
+    ) || /\b(make it|make this)\s+(short|shorter|simpler|clearer)\b/.test(lowerQuery);
+
+  const isExplainFollowup =
+    /\b(explain|elaborate|break\s+down|walk\s+me\s+through|step\s+by\s+step|block[-\s]*by[-\s]*block|in\s+blocks)\b/.test(
+      lowerQuery
+    ) &&
+    /\b(it|this|that|code|solution|answer)\b/.test(lowerQuery);
+
+  let lastAssistantFromContext = "";
+  if (ctx && Array.isArray((ctx as any).turns)) {
+    const turns = (ctx as any).turns as Array<{ role?: string; text?: string }>;
+    for (let i = turns.length - 1; i >= 0; i -= 1) {
+      const t = turns[i];
+      if ((t?.role || "").toLowerCase() !== "assistant") continue;
+      const text = (t?.text || "").toString().trim();
+      if (!text) continue;
+      lastAssistantFromContext = text;
+      break;
+    }
+  }
+
   const latestSearchQuery =
-    typeof ctx?.latest_search?.searchQuery === "string"
-      ? ctx.latest_search.searchQuery.trim()
+    typeof (ctx as any)?.latest_search?.searchQuery === "string"
+      ? (ctx as any).latest_search.searchQuery.trim()
       : "";
 
   const lastSearchFromContext = (() => {
@@ -177,11 +203,15 @@ function extractFollowupTopic(contextLines: string[], query: string) {
       if (!line.startsWith("User:")) continue;
       const t = line.replace(/^User:\s*/i, "").trim();
       if (!t) continue;
-      if (t.toLowerCase() === query.toLowerCase()) continue;
+      if (t.toLowerCase() === String(query || "").toLowerCase()) continue;
       return t;
     }
     return "";
   })();
+
+  if ((isEditingRequest || isExplainFollowup) && lastAssistantFromContext) {
+    return { topic: stripCodeForSearchTopic(lastAssistantFromContext) };
+  }
 
   const best =
     latestSearchQuery || lastSearchFromContext || stripCodeForSearchTopic(lastUserFromContext);
@@ -220,6 +250,10 @@ const PLANNER_SYSTEM_PROMPT =
   "- In the step description, include the chosen query prefixed with the special marker \"§\" so the user can see what is being searched.\n" +
   "  Example: {\"tool\":\"web_search\",\"query\":\"annual car production by Toyota\",\"description\":\"Search for production stats § annual car production by Toyota\"}\n" +
   "- Only the tool step's \"query\" should be used to call tools (not the full user input).\n" +
+  "- When the user uses pronouns like \"it\", \"this\", \"that\", or generic phrases like \"make it shorter\", \"explain in blocks\", or \"break it down\", first identify WHICH earlier message they most likely refer to.\n" +
+  "  - Prefer the most recent assistant answer in the conversation window when the follow-up sounds like editing, clarifying, or restructuring an answer (especially code or an explanation).\n" +
+  "  - Prefer the latest web search topic only when the follow-up clearly refers to search results or explicitly repeats that topic.\n" +
+  "  - Do not assume that follow-ups always refer to the last web search; they can target the latest answer instead.\n" +
   "- If the user is asking to explain, rewrite, summarize, or break down something from the conversation (\"explain it\", \"chunk by chunk\", \"what you wrote\"), use answer mode and do NOT use tools.\n" +
   "- If the user asks for a tutorial/guide and the subject is \"it/this/that\" or implied, treat it as a follow-up to the most recent topic in the provided context.\n" +
   "- Use answer alone only for casual chat or when tools are clearly unnecessary.\n" +
@@ -426,7 +460,10 @@ const ANSWER_SYSTEM_PROMPT =
   "\n" +
   "This request is for generating the assistant's final user-facing answer.\n" +
   "- Use the provided JSON payload fields: query, context, and topic (if present).\n" +
-  "- If the user is asking a follow-up (short reply, pronouns like it/this/that, or requests like tutorial/guide), you MUST anchor your answer to the prior topic from context/topic.\n" +
+  "- If the user is asking a follow-up (short reply, pronouns like it/this/that, or requests like tutorial/guide), you MUST decide which earlier turn they refer to by inspecting the conversation context.\n" +
+  "  - Prefer the most recent assistant answer in the window when the follow-up sounds like editing, clarifying, or restructuring an answer (for example: \"make it shorter\", \"explain it in blocks\", \"break it down\").\n" +
+  "  - Prefer the latest web search topic only when the follow-up clearly refers to search results or repeats that topic by name.\n" +
+  "  - Treat the `topic` field as a hint; if it conflicts with the most likely target from context, follow the conversation context instead.\n" +
   "- Do not define generic terms like \"what is a tutorial\" unless the user explicitly asks.\n" +
   "- Do not mention tools, planning, or internal reasoning.\n";
 
@@ -489,7 +526,7 @@ export async function answerQueryDirect(
 
   const raw = String(result?.text || "").trim();
   if (!raw) {
-    return "I could not generate a full answer just now. Please try again or refine your question.";
+    return "I am not able to generate a useful answer right now.";
   }
   const normalized = raw
     .replace(/\r\n/g, "\n")

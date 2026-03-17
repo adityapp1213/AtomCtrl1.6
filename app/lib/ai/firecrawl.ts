@@ -42,7 +42,9 @@ function truncateText(value: string, maxChars: number) {
   return raw.slice(0, maxChars);
 }
 
-async function firecrawlScrapeMarkdown(url: string): Promise<{ markdown: string; title?: string } | null> {
+async function firecrawlScrapeMarkdown(
+  url: string
+): Promise<{ markdown: string; title?: string; summary?: string } | null> {
   const apiKey = process.env.FIRECRAWL_API_KEY;
   if (!apiKey) return null;
 
@@ -63,7 +65,9 @@ async function firecrawlScrapeMarkdown(url: string): Promise<{ markdown: string;
       },
       body: JSON.stringify({
         url: normalized,
-        formats: ["markdown"],
+        // Ask Firecrawl for both markdown and its built-in summary so we can
+        // avoid extra LLM calls when possible.
+        formats: ["markdown", "summary"],
       }),
       signal: controller.signal,
     });
@@ -75,9 +79,11 @@ async function firecrawlScrapeMarkdown(url: string): Promise<{ markdown: string;
     const markdown = typeof json.data.markdown === "string" ? json.data.markdown : "";
     const title =
       typeof json.data.metadata?.title === "string" ? json.data.metadata.title : undefined;
+    const summary =
+      typeof json.data.summary === "string" ? json.data.summary : undefined;
 
     if (!markdown.trim()) return null;
-    return { markdown, title };
+    return { markdown, title, summary };
   } catch {
     return null;
   } finally {
@@ -217,23 +223,32 @@ export async function scrapeUrls(params: {
     unique.map(async (url) => {
       const doc = await firecrawlScrapeMarkdown(url);
       if (!doc) return null;
-      return { url, title: doc.title, markdown: doc.markdown };
+      return { url, title: doc.title, markdown: doc.markdown, summary: doc.summary };
     })
   );
 
-  const validPages = pages.filter(Boolean) as { url: string; title?: string; markdown: string }[];
+  const validPages = pages.filter(Boolean) as {
+    url: string;
+    title?: string;
+    markdown: string;
+    summary?: string;
+  }[];
 
   const items = (
     await Promise.all(
       validPages.map(async (p) => {
-        const summary = await summarizeScrapedMarkdown({
+        const summaryText = (p.summary || "").toString().trim();
+        if (summaryText) {
+          return { url: p.url, title: p.title, summary: summaryText } satisfies ScrapedUrlSummary;
+        }
+        const llmSummary = await summarizeScrapedMarkdown({
           url: p.url,
           title: p.title,
           markdown: p.markdown,
           query: params.query,
           providerOverride: params.providerOverride,
         });
-        return { url: p.url, title: p.title, summary } satisfies ScrapedUrlSummary;
+        return { url: p.url, title: p.title, summary: llmSummary } satisfies ScrapedUrlSummary;
       })
     )
   ).filter(Boolean) as ScrapedUrlSummary[];

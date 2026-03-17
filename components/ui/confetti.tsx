@@ -67,11 +67,12 @@ const ConfettiComponent = forwardRef<ConfettiRef, Props>((props, ref) => {
   const {
     options,
     globalOptions = { resize: true, useWorker: true },
-    manualstart = false,
+    manualstart = true,
     children,
     ...rest
   } = props
   const instanceRef = useRef<ConfettiInstance | null>(null)
+  const hasFiredRef = useRef(false)
 
   const canvasRef = useCallback(
     (node: HTMLCanvasElement) => {
@@ -94,7 +95,10 @@ const ConfettiComponent = forwardRef<ConfettiRef, Props>((props, ref) => {
   const fire = useCallback(
     async (opts = {}) => {
       try {
-        await instanceRef.current?.({ ...options, ...opts })
+        if (!instanceRef.current) return
+        if (hasFiredRef.current) return
+        hasFiredRef.current = true
+        await instanceRef.current({ ...options, ...opts })
       } catch (error) {
         console.error("Confetti error:", error)
       }
@@ -112,15 +116,14 @@ const ConfettiComponent = forwardRef<ConfettiRef, Props>((props, ref) => {
   useImperativeHandle(ref, () => api, [api])
 
   useEffect(() => {
-    if (!manualstart) {
-      ;(async () => {
-        try {
-          await fire()
-        } catch (error) {
-          console.error("Confetti effect error:", error)
-        }
-      })()
-    }
+    if (manualstart) return
+    ;(async () => {
+      try {
+        await fire()
+      } catch (error) {
+        console.error("Confetti effect error:", error)
+      }
+    })()
   }, [manualstart, fire])
 
   return (

@@ -188,7 +188,7 @@ function normalizeSummaryText(value: string) {
 }
 
 const DEFAULT_FALLBACK_ANSWER =
-  "I could not generate a full answer just now. Please try again or refine your question.";
+  "I am not able to generate a useful answer right now.";
 
 function buildSearchFallbackAnswer(
   searchResult: DynamicSearchResult,
@@ -730,10 +730,9 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
           prev ? { ...prev, completedCount: prev.steps.length } : prev
         );
       }
-    } catch {
-      const fallback =
-        (await answerQueryDirect(nextPrompt, contextInputs).catch(() => "")) ||
-        DEFAULT_FALLBACK_ANSWER;
+    } catch (err) {
+      console.error("[chat] AskCloudy pipeline failed", err);
+      const fallback = "There was an error processing your request. Please try again.";
       setPendingStream({ messageId: responseMessageId, type: "text", text: fallback });
       setMessages((prev) =>
         prev.map((m) =>
@@ -2393,11 +2392,11 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
       setActiveInputSource(null);
       return;
     } catch (err) {
+      console.error("[chat] SearchConversationShell pipeline failed", err);
       deferChatLoadingRef.current = false;
       pendingSpeakShouldSpeakRef.current = false;
       const fallback =
-        (await answerQueryDirect(trimmed, contextInputs).catch(() => "")) ||
-        DEFAULT_FALLBACK_ANSWER;
+        "There was an error processing your request. Please try again.";
       pendingSpeakTextRef.current = fallback;
       setMessages((prev) =>
         prev.map((m) =>
@@ -2495,8 +2494,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
     });
   }, [chatMediaItemsLimited.length]);
 
-  const isAnswerStreaming =
-    Boolean(pendingStream && pendingStream.type === "text");
+  const isAnswerStreaming = Boolean(isChatLoading || pendingStream);
 
   const handlePauseStreaming = useCallback(() => {
     if (pendingStream) {

@@ -4,7 +4,7 @@ import { AtomLogo } from "@/components/logo";
 import { UserButton, useUser } from "@clerk/nextjs";
 import Link, { LinkProps } from "next/link";
 import Image from "next/image";
-import React, { useState, createContext, useContext } from "react";
+import React, { useState, useEffect, createContext, useContext } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Menu, X, SquarePen, Trash2 } from "lucide-react";
 import { useSupabase } from "@/lib/supabase";
@@ -80,7 +80,7 @@ export const MobileSidebar = ({ className, children, ...props }: React.Component
     <>
       <div
         className={cn(
-          "sticky top-0 left-0 right-0 z-40 px-4 pt-4 pb-2 flex flex-row md:hidden items-center bg-white dark:bg-neutral-900 w-full",
+          "sticky top-0 left-0 right-0 z-50 px-4 pt-4 pb-2 flex flex-row md:hidden items-center bg-white dark:bg-neutral-900 w-full",
           className
         )}
         {...props}
@@ -98,7 +98,7 @@ export const MobileSidebar = ({ className, children, ...props }: React.Component
             height={26}
             className="h-8 w-8"
           />
-          <span className="text-2xl font-semibold font-serif italic text-neutral-900 dark:text-neutral-100">
+          <span className="text-2xl font-serif italic text-neutral-900 dark:text-neutral-100">
             Ctrl 1.6 Beta
           </span>
         </button>
@@ -258,7 +258,12 @@ const LocalHistory = () => {
 const AppSidebarContent = () => {
   const { user } = useUser();
   const { open, setOpen } = useSidebar();
+  const [isMounted, setIsMounted] = useState(false);
   const showRequestHistory = false;
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
+
   const displayName =
     user?.fullName ??
     user?.primaryEmailAddress?.emailAddress ??
@@ -288,9 +293,7 @@ const AppSidebarContent = () => {
         >
           <SquarePen className="w-4 h-4" />
         </Link>
-        <div className="mt-auto pb-2">
-          <UserButton />
-        </div>
+        <div className="mt-auto pb-2">{isMounted ? <UserButton /> : null}</div>
       </div>
     );
   }
@@ -333,7 +336,7 @@ const AppSidebarContent = () => {
         {showRequestHistory && <RequestHistory userId={user?.id ?? null} />}
       </div>
       <div className="mt-2 pt-3 border-t border-neutral-200 dark:border-neutral-700 flex items-center gap-3">
-        <UserButton />
+        {isMounted ? <UserButton /> : null}
         <span className="text-sm text-neutral-700 dark:text-neutral-200 truncate">
           {displayName}
         </span>
