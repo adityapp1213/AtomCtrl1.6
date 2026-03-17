@@ -111,6 +111,7 @@ export async function POST(req: Request) {
   const body = new ReadableStream({
     start(controller) {
       let closed = false;
+      const decoder = new TextDecoder();
       const closeOnce = () => {
         if (closed) return;
         closed = true;
@@ -128,7 +129,7 @@ export async function POST(req: Request) {
               typeof rawChunk === "string"
                 ? rawChunk
                 : rawChunk instanceof Uint8Array
-                ? new TextDecoder().decode(rawChunk)
+                ? decoder.decode(rawChunk, { stream: true })
                 : String(rawChunk ?? "");
             if (!chunk) continue;
             controller.enqueue(encoder.encode(chunk));

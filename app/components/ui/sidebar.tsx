@@ -98,12 +98,6 @@ export const MobileSidebar = ({ className, children, ...props }: React.Component
             height={26}
             className="h-8 w-8"
           />
-          <AtomLogo
-            className="h-8 w-auto text-neutral-900 dark:text-neutral-100"
-            ariaLabel="App logo"
-            title="App"
-            size={32}
-          />
           <span className="text-2xl font-semibold font-serif italic text-neutral-900 dark:text-neutral-100">
             Ctrl 1.6 Beta
           </span>

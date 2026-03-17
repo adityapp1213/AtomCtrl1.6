@@ -1,7 +1,7 @@
 // Renders AI search results as an inline chat-style answer with rich blocks
 "use client";
 
-import { useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { WeatherWidget } from "@/components/ui/weather-widget";
@@ -90,6 +90,9 @@ type SearchResultsBlockProps = {
   pinnedIds?: string[];
   onMediaLoad?: () => void;
 };
+
+const ANGLE_URL_REGEX = /<\s*(https?:\/\/[^\s<>|]+)(?:\|[^>]+)?>/g;
+const PAREN_URL_REGEX = /\(\s*(https?:\/\/[^\s()]+)\s*\)/g;
 
 export function SearchResultsBlock({
   searchQuery,
@@ -233,30 +236,17 @@ export function SearchResultsBlock({
     }
   };
 
-  const renderSummaryWithCitations = (text: string) => {
-    const raw = String(text || "").trim();
-    if (!raw) return null;
-
-    const angleRegex = /<\s*(https?:\/\/[^\s<>|]+)(?:\|[^>]+)?>/g;
-    const parenRegex = /\(\s*(https?:\/\/[^\s()]+)\s*\)/g;
-    const value = raw.replace(angleRegex, "$1").replace(parenRegex, "$1");
-
-    const sources = webItems.slice(0, 4).map((item) => ({
+  const sources = useMemo(() => {
+    return webItems.slice(0, 4).map((item) => ({
       title: item.title,
       url: item.link,
       description:
         item.summaryLines.find((l) => l && l.trim().length > 0) || "",
     }));
+  }, [webItems]);
 
-    if (!sources.length) {
-      return (
-        <Response className="text-sm leading-relaxed" parseIncompleteMarkdown>
-          {value}
-        </Response>
-      );
-    }
-
-    const triggerSources = sources.map((s) => {
+  const triggerSources = useMemo(() => {
+    return sources.map((s) => {
       try {
         const u = new URL(s.url);
         return u.hostname.replace(/^www\./i, "");
@@ -264,52 +254,80 @@ export function SearchResultsBlock({
         return s.url;
       }
     });
+  }, [sources]);
 
-    return (
-      <InlineCitation>
-        <div
-          className={cn(
-            "rounded px-0.5 transition-colors",
-            citationActive && "bg-sky-100 dark:bg-sky-900/40"
-          )}
-        >
+  const renderSummaryWithCitations = useCallback(
+    (text: string) => {
+      const raw = String(text || "").trim();
+      if (!raw) return null;
+
+      const value = raw
+        .replace(ANGLE_URL_REGEX, "$1")
+        .replace(PAREN_URL_REGEX, "$1");
+
+      if (summaryIsStreaming) {
+        return (
+          <div className="text-sm leading-relaxed whitespace-pre-wrap">
+            {value}
+          </div>
+        );
+      }
+
+      if (!sources.length) {
+        return (
           <Response className="text-sm leading-relaxed" parseIncompleteMarkdown>
             {value}
           </Response>
-        </div>
-        <InlineCitationCard open={citationActive}>
-          <InlineCitationCardTrigger
-            sources={triggerSources}
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              setCitationActive((prev) => !prev);
-            }}
-          />
-          <InlineCitationCardBody>
-            <InlineCitationCarousel>
-              <InlineCitationCarouselHeader>
-                <InlineCitationCarouselPrev />
-                <InlineCitationCarouselNext />
-                <InlineCitationCarouselIndex />
-              </InlineCitationCarouselHeader>
-              <InlineCitationCarouselContent>
-                {sources.map((source) => (
-                  <InlineCitationCarouselItem key={source.url}>
-                    <InlineCitationSource
-                      title={source.title}
-                      url={source.url}
-                      description={source.description}
-                    />
-                  </InlineCitationCarouselItem>
-                ))}
-              </InlineCitationCarouselContent>
-            </InlineCitationCarousel>
-          </InlineCitationCardBody>
-        </InlineCitationCard>
-      </InlineCitation>
-    );
-  };
+        );
+      }
+
+      return (
+        <InlineCitation>
+          <div
+            className={cn(
+              "rounded px-0.5 transition-colors",
+              citationActive && "bg-sky-100 dark:bg-sky-900/40"
+            )}
+          >
+            <Response className="text-sm leading-relaxed" parseIncompleteMarkdown>
+              {value}
+            </Response>
+          </div>
+          <InlineCitationCard open={citationActive}>
+            <InlineCitationCardTrigger
+              sources={triggerSources}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setCitationActive((prev) => !prev);
+              }}
+            />
+            <InlineCitationCardBody>
+              <InlineCitationCarousel>
+                <InlineCitationCarouselHeader>
+                  <InlineCitationCarouselPrev />
+                  <InlineCitationCarouselNext />
+                  <InlineCitationCarouselIndex />
+                </InlineCitationCarouselHeader>
+                <InlineCitationCarouselContent>
+                  {sources.map((source) => (
+                    <InlineCitationCarouselItem key={source.url}>
+                      <InlineCitationSource
+                        title={source.title}
+                        url={source.url}
+                        description={source.description}
+                      />
+                    </InlineCitationCarouselItem>
+                  ))}
+                </InlineCitationCarouselContent>
+              </InlineCitationCarousel>
+            </InlineCitationCardBody>
+          </InlineCitationCard>
+        </InlineCitation>
+      );
+    },
+    [citationActive, sources, triggerSources, summaryIsStreaming]
+  );
 
   return (
     <div className="w-full space-y-4 pr-3">

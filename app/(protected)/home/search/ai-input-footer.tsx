@@ -1210,17 +1210,27 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
+        let rafId: number | null = null;
+        const flush = () => {
+          rafId = null;
+          setContentState((prev) => {
+            if ((prev.searchQuery || "").trim() !== q) return prev;
+            return { ...prev, summary: buffer };
+          });
+        };
+        const scheduleFlush = () => {
+          if (rafId != null) return;
+          rafId = requestAnimationFrame(flush);
+        };
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
           const chunk = decoder.decode(value, { stream: true });
           if (!chunk) continue;
           buffer += chunk;
-          setContentState((prev) => {
-            if ((prev.searchQuery || "").trim() !== q) return prev;
-            return { ...prev, summary: buffer };
-          });
+          scheduleFlush();
         }
+        flush();
       } catch {
       } finally {
         setChatSummaryStatus("ready");
@@ -1308,19 +1318,29 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          const chunk = decoder.decode(value, { stream: true });
-          if (!chunk) continue;
-          buffer += chunk;
+        let rafId: number | null = null;
+        const flush = () => {
+          rafId = null;
           setMessages((prev) =>
             prev.map((m) => {
               if (m.id !== pendingStream.messageId || m.type !== "search" || !m.data) return m;
               return { ...m, data: { ...m.data, summary: buffer } };
             })
           );
+        };
+        const scheduleFlush = () => {
+          if (rafId != null) return;
+          rafId = requestAnimationFrame(flush);
+        };
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          const chunk = decoder.decode(value, { stream: true });
+          if (!chunk) continue;
+          buffer += chunk;
+          scheduleFlush();
         }
+        flush();
       } catch {
       } finally {
         setPendingStream(null);
