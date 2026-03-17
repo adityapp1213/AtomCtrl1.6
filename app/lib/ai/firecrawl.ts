@@ -70,8 +70,10 @@ function extractUrlsFromText(value: string) {
 }
 
 async function firecrawlScrapeMarkdown(
-  url: string
-): Promise<{ markdown: string; title?: string; summary?: string } | null> {
+  url: string,
+  mode: "summary" | "answer" = "summary",
+  query?: string
+): Promise<{ markdown: string; title?: string; summary?: string; answer?: string } | null> {
   const apiKey = process.env.FIRECRAWL_API_KEY;
   if (!apiKey) {
     // Fallback: try to fetch the page directly and extract basic text
@@ -94,10 +96,12 @@ async function firecrawlScrapeMarkdown(
         .replace(/\s+/g, ' ')
         .trim()
         .slice(0, 2000);
+      const content = textContent || "Unable to extract content from this page.";
       return {
-        markdown: textContent || "Unable to extract content from this page.",
+        markdown: content,
         title,
-        summary: textContent ? `Basic text extracted from ${url}` : undefined
+        summary: mode === "summary" ? `Basic text extracted from ${url}` : undefined,
+        answer: mode === "answer" && query ? `Based on the page content: ${content}` : undefined
       };
     } catch {
       return null;
@@ -113,18 +117,29 @@ async function firecrawlScrapeMarkdown(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 25_000);
   try {
+    let formats: any[];
+    let body: any = { url: normalized };
+
+    if (mode === "answer" && query) {
+      // Use JSON format with prompt for direct answering
+      formats = [{
+        type: "json",
+        prompt: `Answer the user's question using the content from this webpage. Question: ${query}`
+      }];
+      body.formats = formats;
+    } else {
+      // Use markdown and summary for general scraping
+      formats = ["markdown", "summary"];
+      body.formats = formats;
+    }
+
     const res = await fetch("https://api.firecrawl.dev/v2/scrape", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        url: normalized,
-        // Ask Firecrawl for both markdown and its built-in summary so we can
-        // avoid extra LLM calls when possible.
-        formats: ["markdown", "summary"],
-      }),
+      body: JSON.stringify(body),
       signal: controller.signal,
     });
 
@@ -147,10 +162,12 @@ async function firecrawlScrapeMarkdown(
           .replace(/\s+/g, ' ')
           .trim()
           .slice(0, 2000);
+        const content = textContent || "Unable to extract content from this page.";
         return {
-          markdown: textContent || "Unable to extract content from this page.",
+          markdown: content,
           title,
-          summary: textContent ? `Basic text extracted from ${url}` : undefined
+          summary: mode === "summary" ? `Basic text extracted from ${url}` : undefined,
+          answer: mode === "answer" && query ? `Based on the page content: ${content}` : undefined
         };
       } catch {
         return null;
@@ -160,11 +177,26 @@ async function firecrawlScrapeMarkdown(
     const json: any = await res.json();
     if (!json || json.success !== true || !json.data) return null;
 
+    if (mode === "answer" && query) {
+      // Handle JSON response for answering
+      const jsonData = json.data.json;
+      if (jsonData && typeof jsonData === "object") {
+        const answer = typeof jsonData.answer === "string" ? jsonData.answer :
+                      typeof jsonData === "string" ? jsonData :
+                      JSON.stringify(jsonData);
+        const title = typeof json.data.metadata?.title === "string" ? json.data.metadata.title : undefined;
+        return {
+          markdown: json.data.markdown || "",
+          title,
+          answer: answer.trim() || "I couldn't extract a specific answer from this page."
+        };
+      }
+    }
+
+    // Handle regular markdown/summary response
     const markdown = typeof json.data.markdown === "string" ? json.data.markdown : "";
-    const title =
-      typeof json.data.metadata?.title === "string" ? json.data.metadata.title : undefined;
-    const summary =
-      typeof json.data.summary === "string" ? json.data.summary : undefined;
+    const title = typeof json.data.metadata?.title === "string" ? json.data.metadata.title : undefined;
+    const summary = typeof json.data.summary === "string" ? json.data.summary : undefined;
 
     if (!markdown.trim()) return null;
     return { markdown, title, summary };
@@ -314,9 +346,9 @@ export async function scrapeUrls(params: {
 
   const pages = await Promise.all(
     unique.map(async (url) => {
-      const doc = await firecrawlScrapeMarkdown(url);
+      const doc = await firecrawlScrapeMarkdown(url, params.mode, params.query);
       if (!doc) return null;
-      return { url, title: doc.title, markdown: doc.markdown, summary: doc.summary };
+      return { url, title: doc.title, markdown: doc.markdown, summary: doc.summary, answer: doc.answer };
     })
   );
 
@@ -325,11 +357,20 @@ export async function scrapeUrls(params: {
     title?: string;
     markdown: string;
     summary?: string;
+    answer?: string;
   }[];
 
   let items: ScrapedUrlSummary[] = [];
 
   if (validPages.length > 0) {
+    if (params.mode === "answer") {
+      // For answer mode, if we got direct answers from Firecrawl, use them
+      const directAnswers = validPages.filter(p => p.answer).map(p => p.answer!);
+      if (directAnswers.length > 0) {
+        return { items: [], answer: directAnswers.join("\n\n") };
+      }
+    }
+
     items = (
       await Promise.all(
         validPages.map(async (p) => {
