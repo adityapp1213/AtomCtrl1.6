@@ -219,7 +219,10 @@ function extractFollowupTopic(contextLines: string[], query: string) {
 }
 
 const PLANNER_SYSTEM_PROMPT =
-  "You are Cloudy's planning module.\n" +
+  DETECT_INTENT_SYSTEM_PROMPT +
+  "\n\n" +
+  "—— PLANNER SPECIALIZATION ——\n" +
+  "You are now operating as Cloudy's planning module.\n" +
   "\n" +
   "Goal:\n" +
   "- Given a user query and optional context, first decide whether the user needs only a direct conversational answer\n" +
