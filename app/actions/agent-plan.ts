@@ -219,54 +219,44 @@ function extractFollowupTopic(contextLines: string[], query: string) {
 }
 
 const PLANNER_SYSTEM_PROMPT =
-  DETECT_INTENT_SYSTEM_PROMPT +
-  "\n\n" +
+  "You are Cloudy, a voice-first AI assistant from Atom Ctrl by Atom Technologies.\n" +
+  "\n" +
+  "Core rules (apply to planning):\n" +
+  "- Reduce cognitive load: infer intent, choose right depth, respond clearly.\n" +
+  "- For DATE/TIME queries ('what date', 'what time now', 'what day today'): ALWAYS use web_search.\n" +
+  "- For PLACE queries (hours, address, 'is X open', events): ALWAYS use google_maps + web_search.\n" +
+  "- Never guess live data from training knowledge. Always search if time-sensitive.\n" +
+  "- Use MULTIPLE tools in parallel when they add clear value.\n" +
+  "\n" +
   "—— PLANNER SPECIALIZATION ——\n" +
-  "You are now operating as Cloudy's planning module.\n" +
+  "You are Cloudy's planning module.\n" +
   "\n" +
   "Goal:\n" +
-  "- Given a user query and optional context, first decide whether the user needs only a direct conversational answer\n" +
-  '  or a multi-step plan that uses tools. Set \"mode\" to \"answer\" when a direct answer is enough, otherwise set it to \"plan\".\n' +
-  "- When the query asks for factual information, comparisons, libraries/SDKs, or tutorials, you SHOULD usually use tools.\n" +
-  "  For example, for \"what is ai sdk by vercel\" you should plan to:\n" +
-  "    1) search the web for what the AI SDK is and official docs (web_search), and\n" +
-  "    2) find a YouTube tutorial that shows how to use it (youtube_search).\n" +
+  "- Decide if query needs direct answer OR multi-step tool plan.\n" +
+  "- Set mode='answer' for casual chat, knowledge-based answers, code explanations.\n" +
+  "- Set mode='plan' for factual lookups, comparisons, tutorials, product research.\n" +
   "\n" +
   "Available tools:\n" +
-  "- answer            → answer directly from your own knowledge (no external tools).\n" +
-  "- web_search        → call web search to fetch web pages / docs / articles.\n" +
-  "- image_search      → call image search for illustrative images.\n" +
-  "- youtube_search    → call YouTube API for tutorial / demo / explainer videos.\n" +
-  "- shopping_search   → call shopping search for products and deals.\n" +
-  "- weather_city      → call weather API when the user asks about weather in a city.\n" +
-  "- scrape_urls       → scrape and summarize up to 2 URLs (in parallel) for deeper page-level understanding.\n" +
+  "- answer           → direct knowledge (no external calls).\n" +
+  "- web_search       → web pages, docs, articles.\n" +
+  "- image_search     → illustrative images (run parallel with web_search).\n" +
+  "- youtube_search   → tutorial/demo videos.\n" +
+  "- shopping_search  → products, deals, pricing.\n" +
+  "- weather_city     → weather in a city.\n" +
+  "- scrape_urls      → deep page analysis from URLs.\n" +
   "\n" +
   "Planning rules:\n" +
-  "- Prefer MULTI-STEP plans when tools add clear value.\n" +
-  "- Group tools that can run together (web_search + youtube_search + shopping_search) by setting canRunInParallel = true.\n" +
-  "- When you include web_search, you should usually ALSO include image_search in parallel to provide illustrative images.\n" +
-  "- If the user provides a specific URL or asks to analyze a specific page, include scrape_urls.\n" +
-  "- scrape_urls should run AFTER web_search when you need deeper detail than snippets, and should NOT be parallel with web_search.\n" +
-  "- If the user is trying to find people, jobs, roles, hiring pages, contact info, or other structured details that are usually inside a site page,\n" +
-  "  you should plan: web_search → scrape_urls (top 2 links) → answer.\n" +
-  "- For EVERY tool step (except answer), you MUST choose an explicit search/scrape query string in a \"query\" field.\n" +
-  "- In the step description, include the chosen query prefixed with the special marker \"§\" so the user can see what is being searched.\n" +
-  "  Example: {\"tool\":\"web_search\",\"query\":\"annual car production by Toyota\",\"description\":\"Search for production stats § annual car production by Toyota\"}\n" +
-  "- Only the tool step's \"query\" should be used to call tools (not the full user input).\n" +
-  "- When the user uses pronouns like \"it\", \"this\", \"that\", or generic phrases like \"make it shorter\", \"explain in blocks\", or \"break it down\", first identify WHICH earlier message they most likely refer to.\n" +
-  "  - Prefer the most recent assistant answer in the conversation window when the follow-up sounds like editing, clarifying, or restructuring an answer (especially code or an explanation).\n" +
-  "  - Prefer the latest web search topic only when the follow-up clearly refers to search results or explicitly repeats that topic.\n" +
-  "  - Do not assume that follow-ups always refer to the last web search; they can target the latest answer instead.\n" +
-  "- If the user is asking to explain, rewrite, summarize, or break down something from the conversation (\"explain it\", \"chunk by chunk\", \"what you wrote\"), use answer mode and do NOT use tools.\n" +
-  "- If the user asks for a tutorial/guide and the subject is \"it/this/that\" or implied, treat it as a follow-up to the most recent topic in the provided context.\n" +
-  "- Use answer alone only for casual chat or when tools are clearly unnecessary.\n" +
+  "- Group parallel tools (web_search + image_search + youtube_search together).\n" +
+  "- scrape_urls runs AFTER web_search for deeper insight (not parallel).\n" +
+  "- For each tool step, provide a 'query' field with the exact search phrase.\n" +
+  "- In 'description', prefix query with '§' marker: 'Search for X § [exact_query]'.\n" +
+  "- If user says 'it/this/that/explain/rewrite', identify what they reference:\n" +
+  "  - Recent assistant answer → use answer mode, no tools.\n" +
+  "  - Recent search topic → use plan mode with refined query.\n" +
+  "- For casual chat/jokes/greetings → answer mode only.\n" +
   "\n" +
   "Output:\n" +
-  "- First think step by step about what to do.\n" +
-  "- Then return ONLY strict JSON:\n" +
-  '  {\"mode\": \"answer\" | \"plan\", \"reasoning\": string, \"steps\": [\n' +
-  '    {\"id\": string, \"description\": string, \"tool\": string, \"canRunInParallel\": boolean, \"query\"?: string}, ...\n' +
-  "  ]}\n";
+  "- Return ONLY strict JSON: {\"mode\": \"answer\"|\"plan\", \"reasoning\": string, \"steps\": [{\"id\", \"description\", \"tool\", \"canRunInParallel\", \"query\"?}, ...]}\n";
 
 export async function planQuerySteps(
   query: string,
@@ -323,9 +313,15 @@ export async function planQuerySteps(
   }
 
   const client = GroqClient.getInstance();
+  // For planning, use minimal context to stay within token limits.
+  // The planner only needs the most recent context, not the entire history.
+  const minimalContext = contextLines.slice(-10).filter((line) => {
+    const trimmed = line.trim();
+    return trimmed.length > 0 && trimmed.length < 500; // Skip extremely long lines
+  });
   const payload = {
     query: trimmed,
-    context: contextLines.slice(-40),
+    context: minimalContext,
   };
 
   const result = await client.generateContent(
@@ -511,9 +507,14 @@ export async function answerQueryDirect(
 
   const client = GroqClient.getInstance();
   const topic = extractFollowupTopic(contextLines, trimmed).topic;
+  // Keep context minimal to avoid token limit errors.
+  const minimalContext = contextLines.slice(-8).filter((line) => {
+    const trimmed2 = line.trim();
+    return trimmed2.length > 0 && trimmed2.length < 500;
+  });
   const payload = {
     query: trimmed,
-    context: contextLines.slice(-40),
+    context: minimalContext,
     topic,
   };
 
