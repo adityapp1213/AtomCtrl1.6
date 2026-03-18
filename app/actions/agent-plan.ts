@@ -46,18 +46,24 @@ const PLANNER_TOOLS: GroqTool[] = [
     type: "function",
     function: {
       name: "plan",
-      description: "Plan the steps to answer the user's query. ALWAYS call this tool to return structured JSON. The model SHOULD call multiple tools in parallel when needed (e.g., web_search + youtube_search for news briefings, shopping_search + web_search for shopping decisions).",
+      description: "Plan steps to answer the query. Match tools to user's actual request:\n" +
+        "- Books, products, prices -> shopping_search + web_search\n" +
+        "- Videos, tutorials, recaps -> youtube_search + web_search\n" +
+        "- Events, news, briefings -> web_search + youtube_search\n" +
+        "- Comparisons, recommendations -> web_search + shopping_search\n" +
+        "- URLs, links -> scrape_urls\n" +
+        "Set canRunInParallel=true for independent steps.",
       parameters: {
         type: "object",
         properties: {
           mode: {
             type: "string",
             enum: ["answer", "plan"],
-            description: "Whether to answer directly (answer) or use tools (plan). Use 'plan' when search/web/youtube/shopping/tools are needed.",
+            description: "'plan' for searches, 'answer' for direct response.",
           },
           reasoning: {
             type: "string",
-            description: "Brief explanation of WHY this plan was chosen, including which Rule from the Tool Matrix was applied and what the user is trying to accomplish.",
+            description: "Brief explanation of why this plan was chosen.",
           },
           steps: {
             type: "array",
@@ -73,7 +79,7 @@ const PLANNER_TOOLS: GroqTool[] = [
                   description: "Tool to execute. Use web_search for news/facts/opinions. Use youtube_search for videos/tutorials/recaps. Use shopping_search for products/prices. Use image_search for visual content. Use weather_city for weather. Use scrape_urls for specific URLs.",
                 },
                 canRunInParallel: { type: "boolean", description: "TRUE if this step can run at the same time as other steps. Set to FALSE only if this step needs results from another step." },
-                query: { type: "string", description: "Search query for this tool. Keep it focused: 2-5 high-signal words. E.g., 'best places visit India Taj Mahal' not 'I want to find the best places to visit in India besides the Taj Mahal'" },
+                query: { type: ["string", "null"], description: "Search query for this tool. Keep it focused: 2-5 high-signal words. E.g., 'best places visit India Taj Mahal' not 'I want to find the best places to visit in India besides the Taj Mahal'. Use null for answer tool." },
               },
               required: ["id", "description", "tool", "canRunInParallel"],
             },
@@ -331,11 +337,11 @@ export async function planQuerySteps(
   }
 
   const client = GroqClient.getInstance();
-  // For planning, use minimal context to stay within token limits.
-  // The planner only needs the most recent context, not the entire history.
-  const minimalContext = contextLines.slice(-10).filter((line) => {
+  // AGGRESSIVE context reduction for fast planning
+  // Each message can be up to 500 chars, so 5 messages = 2500 chars max
+  const minimalContext = contextLines.slice(-5).filter((line) => {
     const trimmed = line.trim();
-    return trimmed.length > 0 && trimmed.length < 500; // Skip extremely long lines
+    return trimmed.length > 0 && trimmed.length < 300; // Skip long lines
   });
   const payload = {
     query: trimmed,
@@ -357,16 +363,19 @@ export async function planQuerySteps(
   } catch (err) {
     const errorMsg = String((err as Error)?.message || err);
     const isToolParseError = (err as any)?.isToolParseError;
-    // If Groq fails to parse tool call arguments, fall back to simple search
-    if (isToolParseError || errorMsg.includes("Failed to parse tool call arguments")) {
-      console.warn("[planQuerySteps] Tool call parsing failed, falling back to text parsing");
+    const isJsonError = errorMsg.includes("Failed to parse tool call arguments") ||
+                        errorMsg.includes("invalid JSON");
+    
+    // If JSON parsing fails, fall back to simple web search
+    if (isToolParseError || isJsonError) {
+      console.warn("[planQuerySteps] Tool/JSON error, using fast search fallback:", errorMsg.slice(0, 100));
       return {
         mode: "plan" as PlanMode,
-        reasoning: "Using fallback planning due to tool parsing issue.",
+        reasoning: "Using fallback search due to parsing issues.",
         steps: [
           {
             id: "s1",
-            description: `Search the web for: ${stripCodeForSearchTopic(trimmed)}`,
+            description: `Search: ${stripCodeForSearchTopic(trimmed)}`,
             tool: "web_search",
             canRunInParallel: false,
             query: stripCodeForSearchTopic(trimmed),
@@ -382,7 +391,7 @@ export async function planQuerySteps(
     const fc = result.functionCalls[0];
     if (fc.name === "plan" && fc.args) {
       const args = fc.args as { mode?: string; reasoning?: string; steps?: PlannedStep[] };
-      let steps: PlannedStep[] = args.steps || [];
+      const steps: PlannedStep[] = args.steps ? [...args.steps] : [];
       const mode: PlanMode = (args.mode as "answer" | "plan") || "plan";
       const reasoning = args.reasoning || "";
 
@@ -410,6 +419,12 @@ export async function planQuerySteps(
         if (step.description.includes("§")) continue;
         const next = `${step.description} § ${step.query}`.trim();
         step.description = next.length > 280 ? next.slice(0, 280) : next;
+      }
+
+      // If all steps have null/missing queries and are answer-only, fall back to direct answer
+      const nonAnswerSteps = steps.filter(s => s.tool !== "answer");
+      if (nonAnswerSteps.length === 0 || nonAnswerSteps.every(s => !s.query)) {
+        return { mode: "answer", reasoning: "No valid search steps from planner, answering directly.", steps: [] };
       }
 
       if (
@@ -564,7 +579,13 @@ export async function planQuerySteps(
   return { mode, reasoning, steps };
 }
 
-const ANSWER_SYSTEM_PROMPT = COMPACT_SYSTEM_PROMPT;
+const ANSWER_SYSTEM_PROMPT = 
+  "You are Cloudy, the voice-first AI assistant of Atom Technologies.\n" +
+  "Answer the user's question directly and conversationally.\n" +
+  "Keep responses concise and natural.\n" +
+  "If you don't know something, say so honestly.\n" +
+  "Never mention tools, search, or AI internals.\n" +
+  "Today's date: March 18, 2026.\n";
 
 export async function answerQueryDirect(
   query: string,
@@ -603,10 +624,10 @@ export async function answerQueryDirect(
 
   const client = GroqClient.getInstance();
   const topic = extractFollowupTopic(contextLines, trimmed).topic;
-  // Keep context minimal to avoid token limit errors.
-  const minimalContext = contextLines.slice(-8).filter((line) => {
+  // AGGRESSIVE context reduction for fast answers
+  const minimalContext = contextLines.slice(-3).filter((line) => {
     const trimmed2 = line.trim();
-    return trimmed2.length > 0 && trimmed2.length < 500;
+    return trimmed2.length > 0 && trimmed2.length < 200;
   });
   const payload = {
     query: trimmed,
@@ -614,24 +635,25 @@ export async function answerQueryDirect(
     topic,
   };
 
-  const result = await client.generateContent(
-    "openai/gpt-oss-20b",
-    JSON.stringify(payload),
-    {
-      systemInstruction: {
-        parts: [{ text: ANSWER_SYSTEM_PROMPT }],
-      },
+  try {
+    const result = await client.generateContent(
+      "openai/gpt-oss-20b",
+      JSON.stringify(payload),
+      {
+        systemInstruction: {
+          parts: [{ text: ANSWER_SYSTEM_PROMPT }],
+        },
+      }
+    );
+    const raw = String(result?.text || "").trim();
+    if (raw) {
+      return raw.replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n");
     }
-  );
-
-  const raw = String(result?.text || "").trim();
-  if (!raw) {
-    return "I am not able to generate a useful answer right now.";
+  } catch (err) {
+    console.warn("[answerQueryDirect] Error:", String(err).slice(0, 150));
   }
-  const normalized = raw
-    .replace(/\r\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n");
-  return normalized;
+  
+  return "I don't have enough information to answer that. Try searching for it.";
 }
 
 export async function runAgentPlan(
@@ -661,8 +683,30 @@ export async function runAgentPlan(
     return { type: "text", content: answer };
   }
 
-  const plan =
-    options.planOverride ?? (await planQuerySteps(trimmed, contextLines));
+  // FAST PATH: Skip planning for simple direct search queries
+  // If it looks like a clear search query, skip the planning LLM call entirely
+  const lowerQuery = trimmed.toLowerCase();
+  const isObviousSearch =
+    /^what(is|are|was|were|who|where|when|why|how)\b/i.test(lowerQuery) ||
+    /^(search|find|look up|google)\s+/i.test(lowerQuery) ||
+    /^(latest|new|top|best|cheap|price)\s+/i.test(lowerQuery) ||
+    /\b(tutorial|review|price|news|current)\b/i.test(lowerQuery);
+
+  let plan: PlanResult;
+  if (isObviousSearch && contextLines.length === 0) {
+    // Fast path: skip planning entirely for simple searches without context
+    const searchQuery = stripCodeForSearchTopic(trimmed);
+    plan = {
+      mode: "plan",
+      reasoning: "Simple search query detected, using fast path.",
+      steps: [
+        { id: "s1", description: `Web search for: ${searchQuery}`, tool: "web_search", canRunInParallel: false },
+        { id: "s2", description: "Image search for illustration", tool: "image_search", canRunInParallel: true },
+      ],
+    };
+  } else {
+    plan = options.planOverride ?? (await planQuerySteps(trimmed, contextLines));
+  }
 
   const toolSteps = plan.steps.filter((s) => s.tool !== "answer");
   const hasTools = toolSteps.length > 0;

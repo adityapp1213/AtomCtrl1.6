@@ -117,20 +117,18 @@ async function firecrawlScrapeMarkdown(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 25_000);
   try {
-    let formats: any[];
-    let body: any = { url: normalized };
+    let body: object;
 
     if (mode === "answer" && query) {
-      // Use JSON format with prompt for direct answering
-      formats = [{
-        type: "json",
-        prompt: `Answer the user's question using the content from this webpage. Question: ${query}`
-      }];
-      body.formats = formats;
+      body = {
+        url: normalized,
+        formats: [
+          "markdown",
+          { type: "json", prompt: `Answer this question using the page content: ${query}` }
+        ]
+      };
     } else {
-      // Use markdown and summary for general scraping
-      formats = ["markdown", "summary"];
-      body.formats = formats;
+      body = { url: normalized, formats: ["markdown", "summary"] };
     }
 
     const res = await fetch("https://api.firecrawl.dev/v2/scrape", {
@@ -177,26 +175,68 @@ async function firecrawlScrapeMarkdown(
     const json: any = await res.json();
     if (!json || json.success !== true || !json.data) return null;
 
-    if (mode === "answer" && query) {
-      // Handle JSON response for answering
-      const jsonData = json.data.json;
-      if (jsonData && typeof jsonData === "object") {
-        const answer = typeof jsonData.answer === "string" ? jsonData.answer :
-                      typeof jsonData === "string" ? jsonData :
-                      JSON.stringify(jsonData);
-        const title = typeof json.data.metadata?.title === "string" ? json.data.metadata.title : undefined;
-        return {
-          markdown: json.data.markdown || "",
-          title,
-          answer: answer.trim() || "I couldn't extract a specific answer from this page."
-        };
+    // Handle different response formats from Firecrawl
+    let markdown = "";
+    let summary = "";
+    let answer = "";
+    
+    // Case 1: Standard markdown response
+    if (typeof json.data.markdown === "string" && json.data.markdown.trim()) {
+      markdown = json.data.markdown;
+      summary = typeof json.data.summary === "string" ? json.data.summary : "";
+    }
+    
+    // Case 2: JSON response - check both data.json and data.content
+    const jsonData = json.data.json || json.data.content;
+    if (jsonData && typeof jsonData === "object") {
+      const parts: string[] = [];
+      
+      // Extract title from metadata if available
+      const title = json.data.metadata?.title || jsonData.title;
+      if (title) parts.push(`# ${title}`);
+      
+      // Handle description
+      const description = jsonData.description || jsonData.summary;
+      if (description) parts.push(description);
+      
+      // Handle keyPoints
+      if (jsonData.keyPoints && Array.isArray(jsonData.keyPoints)) {
+        parts.push("## Key Points");
+        jsonData.keyPoints.forEach((point: string) => parts.push(`- ${point}`));
       }
+      
+      // Handle other content
+      for (const [key, value] of Object.entries(jsonData)) {
+        if (["title", "description", "summary", "keyPoints", "relatedLinks"].includes(key)) continue;
+        if (typeof value === "string" && value.trim()) {
+          parts.push(`**${key}**: ${value}`);
+        } else if (Array.isArray(value) && value.length > 0) {
+          parts.push(`**${key}**: ${value.join(", ")}`);
+        }
+      }
+      
+      // Handle related links
+      if (jsonData.relatedLinks && Array.isArray(jsonData.relatedLinks)) {
+        parts.push("## Related Links");
+        jsonData.relatedLinks.forEach((link: string) => parts.push(`- ${link}`));
+      }
+      
+      markdown = parts.join("\n\n") || markdown;
+      summary = description || summary;
+      answer = description || parts.join(" ");
+    }
+    
+    // Case 3: Raw content field
+    else if (typeof json.data.content === "string" && json.data.content.trim()) {
+      markdown = json.data.content;
+      summary = "";
     }
 
-    // Handle regular markdown/summary response
-    const markdown = typeof json.data.markdown === "string" ? json.data.markdown : "";
     const title = typeof json.data.metadata?.title === "string" ? json.data.metadata.title : undefined;
-    const summary = typeof json.data.summary === "string" ? json.data.summary : undefined;
+
+    if (mode === "answer" && query && answer) {
+      return { markdown, title, summary, answer };
+    }
 
     if (!markdown.trim()) return null;
     return { markdown, title, summary };

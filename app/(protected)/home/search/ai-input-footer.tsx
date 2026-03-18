@@ -541,7 +541,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
           const isSearch = m.type === "search" && m.data;
           return hasContent || isSearch;
         })
-        .slice(-50)
+        .slice(-10)
         .map((m) => {
           const prefix = m.role === "user" ? "User" : "Assistant";
           if (m.type === "search" && m.data) {
@@ -550,10 +550,10 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
               "Search results";
             return `${prefix}: (Search for "${m.data.searchQuery}") ${summary.slice(
               0,
-              500
+              300
             )}`;
           }
-          const maxLen = m.role === "assistant" ? 1200 : 800;
+          const maxLen = m.role === "assistant" ? 600 : 400;
           const body = (m.content || "").trim().slice(0, maxLen);
           return `${prefix}: ${body}`;
         });
@@ -1419,35 +1419,17 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
     const run = async () => {
       if (pendingStream.type === "text") {
         const text = String(pendingStream.text ?? "");
-        const parts = text.split(/(\s+)/);
-        let buffer = "";
-        let wordBatchCount = 0;
-        const wordsPerBatch = 6;
+        const messageId = pendingStream.messageId;
 
-        for (const part of parts) {
-          if (!part) continue;
-          if (streamTaskRef.current !== taskId) return;
-
-          buffer += part;
-
-          if (/\S/.test(part)) {
-            wordBatchCount += 1;
+        setMessages((prev) => {
+          for (let i = 0; i < prev.length; i++) {
+            if (prev[i].id === messageId) {
+              prev[i] = { ...prev[i], content: text };
+              return [...prev];
+            }
           }
-
-          const isLastChunk = buffer.length >= text.length;
-
-          if (wordBatchCount >= wordsPerBatch || isLastChunk) {
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === pendingStream.messageId ? { ...m, content: buffer } : m
-              )
-            );
-            wordBatchCount = 0;
-            await new Promise<void>((resolve) =>
-              requestAnimationFrame(() => resolve())
-            );
-          }
-        }
+          return prev;
+        });
 
         setPendingStream(null);
         setCurrentPlanMeta((prev) =>
@@ -1462,6 +1444,8 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
       const yt = Array.isArray(pendingStream.youtubeItems) ? pendingStream.youtubeItems : [];
       const shop = Array.isArray(pendingStream.shoppingItems) ? pendingStream.shoppingItems : [];
       const weather = Array.isArray(pendingStream.weatherItems) ? pendingStream.weatherItems : [];
+      const messageId = pendingStream.messageId;
+      
       if (!q || (items.length === 0 && scraped.length === 0 && yt.length === 0 && shop.length === 0 && weather.length === 0)) {
         setPendingStream(null);
         return;
@@ -1483,32 +1467,62 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
         if (!resp.ok || !resp.body) {
           throw new Error("stream_failed");
         }
+        
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
-        let rafId: number | null = null;
-        const flush = () => {
-          rafId = null;
-          setMessages((prev) =>
-            prev.map((m) => {
-              if (m.id !== pendingStream.messageId || m.type !== "search" || !m.data) return m;
-              return { ...m, data: { ...m.data, summary: buffer } };
-            })
-          );
+        let pendingUpdate: string | null = null;
+        let updateScheduled = false;
+        
+        const scheduleUpdate = () => {
+          if (updateScheduled || !pendingUpdate) return;
+          updateScheduled = true;
+          requestAnimationFrame(() => {
+            if (streamTaskRef.current !== taskId) return;
+            updateScheduled = false;
+            const text = pendingUpdate || "";
+            pendingUpdate = null;
+            if (text) {
+              setMessages((prev) => {
+                for (let i = 0; i < prev.length; i++) {
+                  const m = prev[i];
+                  if (m.id === messageId && m.type === "search" && m.data) {
+                    if (m.data.summary !== text) {
+                      prev[i] = { ...m, data: { ...m.data, summary: text } };
+                      return [...prev];
+                    }
+                  }
+                }
+                return prev;
+              });
+            }
+          });
         };
-        const scheduleFlush = () => {
-          if (rafId != null) return;
-          rafId = requestAnimationFrame(flush);
-        };
+
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
+          if (streamTaskRef.current !== taskId) break;
+          
           const chunk = decoder.decode(value, { stream: true });
           if (!chunk) continue;
           buffer += chunk;
-          scheduleFlush();
+          pendingUpdate = buffer;
+          scheduleUpdate();
         }
-        flush();
+        
+        if (buffer) {
+          setMessages((prev) => {
+            for (let i = 0; i < prev.length; i++) {
+              const m = prev[i];
+              if (m.id === messageId && m.type === "search" && m.data) {
+                prev[i] = { ...m, data: { ...m.data, summary: buffer } };
+                return [...prev];
+              }
+            }
+            return prev;
+          });
+        }
       } catch {
       } finally {
         setPendingStream(null);
@@ -2762,9 +2776,9 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                             <div className="shrink-0">
                               <AtomLogo size={28} className="text-foreground" />
                             </div>
-                            <div className="w-full pt-1 pb-24 md:pb-0">
+                            <div className="w-full pt-1 pb-4 md:pb-0">
                               {msg.planReasoning && (
-                                <div className="mb-3 pb-20 md:pb-0">
+                                <div className="mb-3">
                                   <Reasoning
                                     isStreaming={reasoningMessageId === msg.id}
                                   >
@@ -2830,9 +2844,9 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                                 <div className="shrink-0">
                                   <AtomLogo size={28} className="text-foreground" />
                                 </div>
-                              <div className="w-full pt-1 pb-24 md:pb-0">
+                              <div className="w-full pt-1 pb-4 md:pb-0">
                                   {msg.planReasoning && (
-                                    <div className="mb-3 pb-20 md:pb-0">
+                                    <div className="mb-3">
                                       <Reasoning
                                         isStreaming={reasoningMessageId === msg.id}
                                       >

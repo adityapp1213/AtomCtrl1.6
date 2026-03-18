@@ -44,41 +44,23 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { readable, writable } = new TransformStream<Uint8Array>();
-    const reader = upstream.body.getReader();
-    const writer = writable.getWriter();
-
-    let firstByteLogged = false;
-
-    (async () => {
-      try {
-        // Stream audio through while logging Time To First Byte (TTFB)
-        // similar to the Python example's first_byte_time.
-        // eslint-disable-next-line no-constant-condition
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (value && value.length > 0) {
-            if (!firstByteLogged) {
-              firstByteLogged = true;
-              const ttfbMs = Date.now() - startTime;
-              console.log("Deepgram TTS Time to First Byte (ms):", ttfbMs);
-            }
-            await writer.write(value);
-          }
+    const transformer = new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        if (Date.now() - startTime < 1000) {
+          console.log("Deepgram TTS Time to First Byte (ms):", Date.now() - startTime);
         }
-      } catch (err) {
-        console.error("Error streaming Deepgram TTS response", err);
-      } finally {
-        await writer.close();
-      }
-    })();
+        controller.enqueue(chunk);
+      },
+    });
 
-    return new NextResponse(readable, {
+    const body = upstream.body.pipeThrough(transformer);
+
+    return new Response(body, {
       status: 200,
       headers: {
         "Content-Type": "audio/mpeg",
         "Cache-Control": "no-store",
+        "X-Accel-Buffering": "no",
       },
     });
   } catch (err) {
@@ -89,4 +71,3 @@ export async function POST(req: NextRequest) {
     );
   }
 }
-

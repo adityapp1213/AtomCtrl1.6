@@ -122,6 +122,8 @@ export class GroqClient {
       );
     }
 
+    const hasTools = options.tools && options.tools.length > 0;
+
     for (const key of this.apiKeys) {
       const client = this.getClient(key);
 
@@ -130,8 +132,7 @@ export class GroqClient {
           const completion = await client.chat.completions.create({
             model,
             messages,
-            tools: (options.tools as unknown as any) ?? undefined,
-            tool_choice: options.tools?.length ? ("auto" as any) : undefined,
+            tools: hasTools ? (options.tools as unknown as any) : undefined,
             temperature: 0.5,
             top_p: 1,
             max_tokens: 2048,
@@ -294,10 +295,12 @@ export class GroqClient {
           });
 
           for await (const chunk of stream as AsyncIterable<{
-            choices?: Array<{ delta?: { content?: string } }>;
+            choices?: Array<{ delta?: { content?: string | null } }>;
           }>) {
-            const delta = chunk?.choices?.[0]?.delta?.content ?? "";
-            if (delta) yield delta;
+            const delta = chunk?.choices?.[0]?.delta?.content;
+            if (delta != null && delta !== "") {
+              yield delta;
+            }
           }
           return;
         } catch (err) {

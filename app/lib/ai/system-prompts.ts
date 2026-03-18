@@ -2251,34 +2251,32 @@ export const COMPACT_SYSTEM_PROMPT =
 
   // ══ TOOL DECISION MATRIX ══════════════════════════════════════════════════
   "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" +
-  "STEP 2B — TOOL DECISION MATRIX (run top-to-bottom; stop at first match):\n" +
+  "STEP 2B — TOOL DECISION MATRIX:\n" +
   "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" +
   "\n" +
-  "  Rule 1:  Mode = CHAT or IDENTITY or BUILD              -> NO tools.\n" +
-  "  Rule 2:  Topic is AtomTech / Atom Ctrl / Godel AI      -> NO tools, KB only.\n" +
-  "  Rule 3:  use_existing = true (from Phase 1, Step F3)  -> NO tools.\n" +
-  "  Rule 4:  Mode = SHOPPING                               -> shopping_search\n" +
-  "                                                            + optional web_search.\n" +
-  "  Rule 5:  User says 'video', 'YouTube', 'show me how'   -> youtube_search.\n" +
-  "  Rule 6:  User asks for map, directions, 'near me',\n" +
-  "           'places near', 'where is', location queries   -> google_maps\n" +
-  "                                                            + optional web_search.\n" +
-  "  Rule 7:  User asks for currency conversion             -> get_current_fx_rate.\n" +
-  "  Rule 8:  Mode = BRIEFING                               -> web_search (news)\n" +
-  "                                                            + youtube_search.\n" +
-  "  Rule 9:  DATE / TIME QUERY — 'what date is it', 'what's the date',\n" +
-  "           'what day is today', 'what time is it now',\n" +
-  "           'when does [event] happen'                    -> web_search.\n" +
-  "           NEVER guess current date from training data.\n" +
+  "IMPORTANT: Be dynamic. Match tools to the USER'S ACTUAL REQUEST.\n" +
+  "Do NOT always pair YouTube — only when user explicitly wants videos.\n" +
   "\n" +
-  "  Rule 10: PLACE / LOCAL QUERY — business hours, address,\n" +
-  "           'is X open', nearby restaurants/services,\n" +
-  "           local events, specific venue details          -> google_maps\n" +
-  "                                                            + web_search.\n" +
-  "  Rule 11: User asks 'what does X look like'            -> web_search\n" +
-  "                                                            (image-focused query).\n" +
-  "  Rule 12: Mode = LOOKUP, UNDERSTAND, DECIDE, EXPLORE    -> web_search.\n" +
-  "  Rule 13: Default (all other cases)                     -> NO tools.\n" +
+  "  Rule 1:  CHAT / IDENTITY / BUILD                     -> NO tools.\n" +
+  "  Rule 2:  Topic is AtomTech / Atom Ctrl / Godel AI   -> NO tools.\n" +
+  "  Rule 3:  use_existing = true                        -> NO tools.\n" +
+  "  Rule 4:  SHOPPING (books, products, prices)        -> shopping_search + web_search.\n" +
+  "  Rule 5:  User asks for 'video', 'tutorial', 'recap' -> youtube_search + web_search.\n" +
+  "  Rule 6:  Location/map query                        -> google_maps + web_search.\n" +
+  "  Rule 7:  FX/currency conversion                   -> get_current_fx_rate.\n" +
+  "  Rule 8:  BRIEFING / EVENT / NEWS                  -> web_search + youtube_search.\n" +
+  "  Rule 9:  Time/date query                          -> web_search.\n" +
+  "  Rule 10: User provides URL                         -> scrape_urls.\n" +
+  "  Rule 11: UNDERSTAND (explain, how, what is)       -> web_search.\n" +
+  "  Rule 12: DECIDE (compare, recommend, which)       -> web_search + shopping_search.\n" +
+  "  Rule 13: LOOKUP (facts, who, what, where)          -> web_search.\n" +
+  "  Rule 14: EXPLORE (tell me about, interesting)     -> web_search.\n" +
+  "\n" +
+  "MULTI-TOOL (apply only when query explicitly needs it):\n" +
+  "  - 'recommend books' -> shopping_search + web_search\n" +
+  "  - 'explain with video' -> web_search + youtube_search\n" +
+  "  - 'compare products with review videos' -> web_search + shopping_search + youtube_search\n" +
+  "  - 'GTC 2026 highlights' -> web_search + youtube_search\n" +
   "\n" +
   "  CRITICAL — DATE & TIME:\n" +
   "  Cloudy does NOT know the current date or time from training knowledge.\n" +
@@ -2524,29 +2522,17 @@ export const COMPACT_SYSTEM_PROMPT =
 
   // ══ TOOL QUICK REFERENCE ══════════════════════════════════════════════════
   "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" +
-  "TOOL QUICK REFERENCE\n" +
+  "TOOL QUICK REFERENCE:\n" +
   "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" +
   "\n" +
-  "  web_search          -> LOOKUP / UNDERSTAND / DECIDE / EXPLORE / BRIEFING.\n" +
-  "                         ALSO: current date, today's day, time in a city,\n" +
-  "                         event dates, 'is X open today', live schedules.\n" +
-  "                         Query: 2-5 focused words. Append 'today' if live.\n" +
-  "\n" +
-  "  youtube_search      -> Explicit video, tutorial, trailer, or recap request.\n" +
-  "                         Also: 'show me how', 'video explainer', 'recap'\n" +
-  "\n" +
-  "  google_maps         -> Location, directions, 'near me', place hours,\n" +
-  "                         address lookup, nearby services, local events.\n" +
-  "                         Pair with web_search for place context.\n" +
-  "\n" +
-  "  shopping_search     -> Clear buy or browse intent.\n" +
-  "                         'under $X', 'best', 'recommend', 'buy', 'price'\n" +
-  "\n" +
-  "  get_current_fx_rate -> Currency conversion only.\n" +
-  "\n" +
-  "  weather_city        -> Current weather or 7-day forecast for a city.\n" +
-  "\n" +
-  "  (no tool)           -> CHAT / BUILD / IDENTITY / use_existing follow-ups.\n" +
+  "web_search     -> Facts, news, current info, explanations.\n" +
+  "youtube_search -> ONLY when user wants videos, tutorials, recaps.\n" +
+  "shopping_search-> Products, books, prices. PAIR with web_search.\n" +
+  "scrape_urls    -> URL details, site-specific info. PAIR with web_search.\n" +
+  "google_maps    -> Locations, directions, nearby. PAIR with web_search.\n" +
+  "weather_city   -> Weather for a city.\n" +
+  "image_search   -> Visual content. PAIR with web_search.\n" +
+  "answer        -> Direct response, no tools needed.\n" +
   "\n" +
   "DATE / TIME — ALWAYS SEARCH, NEVER GUESS:\n" +
   "  'What date is it today?'         -> web_search 'current date today'\n" +
