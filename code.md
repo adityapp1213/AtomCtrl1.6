@@ -4,7 +4,8 @@
 - Auth: Clerk for authentication and middleware-based route protection.
 - Backend: Convex for chat persistence, plus Next.js route handlers for AI, Deepgram, Supabase, and analytics.
 - AI: Gemini and Groq providers, Google Custom Search + SerpAPI, YouTube Data API, SerpAPI Shopping, OpenWeather, Deepgram STT/TTS, and mem0 memory.
-- UX focus: Voice-first search assistant (“Cloudy”) with multi-pane chat UI, map/weather/shopping integrations, and long-term conversation memory via mem0.
+- UX focus: Voice-first search assistant ("Cloudy") with multi-pane chat UI, map/weather/shopping integrations, and long-term conversation memory via mem0.
+- **Agentic Flow**: Cloudy uses a 5-phase planning loop (Filter → Plan → Act → Reflect → Respond) with LLM-driven tool orchestration via `runAgentPlan()`.
 
 Key files:
 
@@ -15,8 +16,10 @@ Key files:
 - [app/(protected)/home/search/page.tsx](file:///c:/Users/adity/OneDrive/Desktop/AtomCtrlvo1/app/(protected)/home/search/page.tsx)
 - [app/(protected)/home/search/ai-input-footer.tsx](file:///c:/Users/adity/OneDrive/Desktop/AtomCtrlvo1/app/(protected)/home/search/ai-input-footer.tsx)
 - [app/actions/search.ts](file:///c:/Users/adity/OneDrive/Desktop/AtomCtrlvo1/app/actions/search.ts)
+- [app/actions/agent-plan.ts](file:///c:/Users/adity/OneDrive/Desktop/AtomCtrlvo1/app/actions/agent-plan.ts)
 - [app/lib/ai/genai.ts](file:///c:/Users/adity/OneDrive/Desktop/AtomCtrlvo1/app/lib/ai/genai.ts)
 - [app/lib/ai/search.ts](file:///c:/Users/adity/OneDrive/Desktop/AtomCtrlvo1/app/lib/ai/search.ts)
+- [app/lib/ai/system-prompts.ts](file:///c:/Users/adity/OneDrive/Desktop/AtomCtrlvo1/app/lib/ai/system-prompts.ts)
 - [app/lib/ai/youtube.ts](file:///c:/Users/adity/OneDrive/Desktop/AtomCtrlvo1/app/lib/ai/youtube.ts)
 - [app/lib/serpapi/shopping.ts](file:///c:/Users/adity/OneDrive/Desktop/AtomCtrlvo1/app/lib/serpapi/shopping.ts)
 - [app/lib/weather.ts](file:///c:/Users/adity/OneDrive/Desktop/AtomCtrlvo1/app/lib/weather.ts)
@@ -27,9 +30,126 @@ Key files:
 - [app/api/ai/search-health/route.ts](file:///c:/Users/adity/OneDrive/Desktop/AtomCtrlvo1/app/api/ai/search-health/route.ts)
 - [app/api/deepgram/tts/route.ts](file:///c:/Users/adity/OneDrive/Desktop/AtomCtrlvo1/app/api/deepgram/tts/route.ts)
 - [app/api/deepgram/stt/route.ts](file:///c:/Users/adity/OneDrive/Desktop/AtomCtrlvo1/app/api/deepgram/stt/route.ts)
--
+
 - [proxy.ts](file:///c:/Users/adity/OneDrive/Desktop/AtomCtrlvo1/proxy.ts)
 - [package.json](file:///c:/Users/adity/OneDrive/Desktop/AtomCtrlvo1/package.json)
+
+## Agentic Flow Architecture
+
+Cloudy implements a **5-phase planning loop** where the LLM plans, calls tools, observes results, and synthesizes responses. This replaces the old `detectIntent`-only flow with a unified agent orchestrator.
+
+### 5-Phase Loop
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  PHASE 1 · FILTER     Parse context, detect continuation    │
+│  PHASE 2 · PLAN       Classify intent, decide tools         │
+│  PHASE 3 · ACT        Execute tools in parallel             │
+│  PHASE 4 · REFLECT    Verify quality, coverage, coherence   │
+│  PHASE 5 · RESPOND    Write TTS-ready reply                 │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### Core Components
+
+#### Agent Orchestrator (`app/actions/agent-plan.ts`)
+
+- [runAgentPlan](file:///c:/Users/adity/OneDrive/Desktop/AtomCtrlvo1/app/actions/agent-plan.ts#L495-L783): Main server action that drives the complete agentic loop
+- [planQuerySteps](file:///c:/Users/adity/OneDrive/Desktop/AtomCtrlvo1/app/actions/agent-plan.ts#L226-L419): LLM-driven planning that decides which tools to use
+- [answerQueryDirect](file:///c:/Users/adity/OneDrive/Desktop/AtomCtrlvo1/app/actions/agent-plan.ts#L423-L493): Direct answer generation for no-tool queries
+
+#### Types and Structures
+
+```ts
+type PlannedTool = "answer" | "web_search" | "image_search" | "youtube_search" | "shopping_search" | "weather_city" | "scrape_urls";
+
+type PlannedStep = {
+  id: string;
+  description: string;
+  tool: PlannedTool;
+  canRunInParallel: boolean;
+  query?: string;
+};
+
+type PlanResult = {
+  mode: "answer" | "plan";
+  reasoning: string;
+  steps: PlannedStep[];
+};
+
+type RunAgentOptions = {
+  context?: string[];
+  userId?: string | null;
+  sessionId?: string | null;
+  shoppingLocation?: string | null;
+  forceSearch?: boolean;
+  planOverride?: PlanResult;
+};
+```
+
+### Planning Flow
+
+1. **URL Detection**: Explicit URLs in query route to `scrape_urls` tool
+2. **Small Talk Filter**: Recognizes greetings, thanks, and emotional expressions
+3. **LLM Planning**: Uses Groq with `COMPACT_SYSTEM_PROMPT` to generate structured plans
+4. **Tool Augmentation**: Automatically adds `image_search` and `scrape_urls` based on query patterns
+5. **Parallel Execution**: Groups tools with `canRunInParallel: true` into batches
+
+### Tool Execution Strategy
+
+```ts
+// Tools are batched by dependency analysis
+const needsWeb = toolSteps.some((s) => s.tool === "web_search");
+const needsImages = toolSteps.some((s) => s.tool === "image_search");
+const needsYoutube = toolSteps.some((s) => s.tool === "youtube_search");
+const needsShopping = toolSteps.some((s) => s.tool === "shopping_search");
+const needsWeather = toolSteps.some((s) => s.tool === "weather_city");
+const needsScrape = toolSteps.some((s) => s.tool === "scrape_urls");
+
+// Scrape depends on web results if no explicit URLs provided
+const scrapeDependsOnWebItems = hasScrapeStep && explicitUrls.length === 0;
+```
+
+### Query Classification Modes
+
+From `system-prompts.ts`, queries are classified into modes that determine tool usage:
+
+| Mode | Tools | Description |
+|------|-------|-------------|
+| LOOKUP | web_search | Factual, time-sensitive queries |
+| UNDERSTAND | web_search | Explanations and learning |
+| DECIDE | web_search + shopping | Comparisons and recommendations |
+| BUILD | no tools | Design and architecture |
+| EXPLORE | web_search | Open curiosity |
+| CHAT | no tools | Greetings, small talk |
+| SHOPPING | shopping_search + web_search | Buy/browse intent |
+| BRIEFING | web_search + youtube_search | Daily digest |
+| IDENTITY | no tools | Questions about Cloudy/AtomTech |
+
+### System Prompts (`app/lib/ai/system-prompts.ts`)
+
+- [DETECT_INTENT_SYSTEM_PROMPT](file:///c:/Users/adity/OneDrive/Desktop/AtomCtrlvo1/app/lib/ai/system-prompts.ts#L1-L1600+): Comprehensive master prompt (~1600+ lines) defining:
+  - 5-phase core loop with detailed phase specifications
+  - Intent classification rules (Step 2A-2D)
+  - Tool decision matrix (Rules 1-13)
+  - Source summarization protocol
+  - Response quality standards
+  - TTS formatting rules
+  - Query playbook directory (20+ categories, 200+ patterns)
+  - AtomTech internal knowledge base
+  - Personality and voice guidelines
+
+### Intent Detection (`app/lib/ai/genai.ts`)
+
+- [detectIntent](file:///c:/Users/adity/OneDrive/Desktop/AtomCtrlvo1/app/lib/ai/genai.ts#L149-L183): Used by search page for pre-populating results
+- Integrates with `DETECT_INTENT_SYSTEM_PROMPT` for tool-style JSON responses
+- Returns `DetectResult` with `shouldShowTabs`, `searchQuery`, `webSearchQuery`, `youtubeQuery`, `shoppingQuery`, `mapLocation`
+
+### Firecrawl Integration (`app/lib/ai/firecrawl.ts`)
+
+- [scrapeUrls](file:///c:/Users/adity/OneDrive/Desktop/AtomCtrlvo1/app/lib/ai/firecrawl.ts): Web scraping for deep page content
+- Modes: "summary" (URL summarization) or "answer" (direct question answering)
+- Used by `scrape_urls` tool in agent plan
 
 ## App Shell, Routing, and Auth
 
@@ -88,14 +208,27 @@ Key files:
 
 ## Server Actions and AI Orchestration
 
-- Dynamic search orchestration:
-  - [app/actions/search.ts](file:///c:/Users/adity/OneDrive/Desktop/AtomCtrlvo1/app/actions/search.ts#L1-L18) is a `"use server"` module containing:
-    - `performDynamicSearch`: orchestrates `detectIntent`, `webSearch`, `imageSearch`, `summarizeItems`, `summarizeChatAnswerFromWebItems`, `summarizeChatAnswerFromShoppingItems`, `youtubeSearch`, `fetchWeatherForCity`, `shoppingSearch`, and mem0 context to produce a `DynamicSearchResult`.
-    - Helpers like `looksLikeRefersToPreviousResults`, `extractLocationsFromQuery`, `extractShoppingQuery`, `extractExplicitSearchQuery` to interpret user queries and disambiguate search vs follow-up.
-    - Memory extraction and persistence via mem0:
-      - `extractMemoryFromWindow` uses `GroqClient` to summarize a conversation window and writes “permanent facts” back to mem0 with `mem0AddTurn`.
-    - Uses Next `cookies()` to select the AI provider (Groq vs Gemini) via `ai_provider` cookie.
-- Intent detection:
+### Dynamic Search Orchestration (Legacy)
+
+- [app/actions/search.ts](file:///c:/Users/adity/OneDrive/Desktop/AtomCtrlvo1/app/actions/search.ts#L1-L18) is a `"use server"` module containing:
+  - `performDynamicSearch`: orchestrates `detectIntent`, `webSearch`, `imageSearch`, `summarizeItems`, `summarizeChatAnswerFromWebItems`, `summarizeChatAnswerFromShoppingItems`, `youtubeSearch`, `fetchWeatherForCity`, `shoppingSearch`, and mem0 context to produce a `DynamicSearchResult`.
+  - Helpers like `looksLikeRefersToPreviousResults`, `extractLocationsFromQuery`, `extractShoppingQuery`, `extractExplicitSearchQuery` to interpret user queries and disambiguate search vs follow-up.
+  - Memory extraction and persistence via mem0:
+    - `extractMemoryFromWindow` uses `GroqClient` to summarize a conversation window and writes "permanent facts" back to mem0 with `mem0AddTurn`.
+  - Uses Next `cookies()` to select the AI provider (Groq vs Gemini) via `ai_provider` cookie.
+
+### Agentic Plan Orchestration (New)
+
+- [app/actions/agent-plan.ts](file:///c:/Users/adity/OneDrive/Desktop/AtomCtrlvo1/app/actions/agent-plan.ts#L1-L783) is a `"use server"` module containing the new agentic flow:
+  - `runAgentPlan`: Main orchestrator that drives the 5-phase loop (Filter → Plan → Act → Reflect → Respond)
+  - `planQuerySteps`: LLM-driven planning using `COMPACT_SYSTEM_PROMPT` to generate structured plans
+  - `answerQueryDirect`: Direct answer generation for no-tool queries
+  - `looksLikeSmallTalkQuery`: Quick filter for greetings/thanks/emotional expressions
+  - `extractUrlsFromText`: Parses explicit URLs from user input for `scrape_urls` tool
+  - `extractFollowupTopic`: Detects edit/summarize/explain follow-ups from conversation context
+  - `extractConversationContextObject`: Parses `ConversationContext` JSON blocks
+
+### Intent Detection
   - [detectIntent](file:///c:/Users/adity/OneDrive/Desktop/AtomCtrlvo1/app/lib/ai/genai.ts#L149-L183) in `genai.ts`:
     - Performs early exits for small talk (thanks/hi/etc.), returning a simple text line and disabling tabs.
     - Recognizes app-specific prefixes like `"YouTube "` to route directly to a video search experience.
@@ -275,6 +408,26 @@ Key files:
   - `tests/ai-search-page.test.mjs` and `tests/supabase-clerk.test.mjs` (not expanded here) appear to validate AI search flows and Clerk/Supabase integration.
   - Testing is currently minimal and targeted at integration-level behavior.
 
+## PRD and Design Specifications
+
+- [PRD.md](file:///c:/Users/adity/OneDrive/Desktop/AtomCtrlvo1/PRD.md): Detailed Product Requirements Document for the Cloudy Agent, including:
+  - Complete 5-phase architecture (Filter → Plan → Act → Reflect → Respond)
+  - Tool definitions and planning rules
+  - Example flows for 20+ query types
+  - Multi-step execution over tools with parallelization
+  - UI integration specifications
+  - Phased implementation plan
+  - Success metrics
+
+- [ai.md](file:///c:/Users/adity/OneDrive/Desktop/AtomCtrlvo1/ai.md): AI architecture documentation covering:
+  - Intent detection (`detectIntent`)
+  - Web/image search and summarization
+  - YouTube search, shopping search, weather integration
+  - Mem0 long-term memory
+  - Dynamic search orchestration
+  - Voice/audio integration (Deepgram STT/TTS)
+  - UI integration patterns
+
 ## Observations and Potential Follow-Ups (Non-Destructive)
 
 - Overall architecture:
@@ -283,16 +436,36 @@ Key files:
     - UI components (app/components/ui, ai-elements, top-level components).
     - Convex schema and backend logic.
   - Strong emphasis on composability and provider abstraction, especially for AI and search.
+  - **Agentic flow**: The new 5-phase planning loop in `agent-plan.ts` represents a significant architectural shift from imperative tool calling to LLM-driven planning.
+  - **Dual orchestration paths**: The codebase now supports both `performDynamicSearch` (legacy) and `runAgentPlan` (new agentic flow).
+
+- System prompts evolution:
+  - `system-prompts.ts` has grown to ~1600+ lines with a comprehensive query playbook covering 20+ categories (Small Talk, Knowledge, Finance, Shopping, Travel, Technology, etc.)
+  - Each playbook entry specifies Filter, Plan, Act, Reflect, and Respond phases for consistent behavior.
+  - The `COMPACT_SYSTEM_PROMPT` is used for lightweight LLM planning calls.
+
+- Tool orchestration:
+  - Tools are now planned dynamically rather than selected imperatively
+  - `canRunInParallel` flag enables efficient batch execution
+  - Automatic tool augmentation (image_search added to web_search, scrape_urls for job/career queries)
+  - URL-based routing to scrape_urls tool for explicit user-provided links
+
 - Error handling:
   - External API wrappers (search, YouTube, weather, Deepgram, SerpAPI) consistently:
     - Validate inputs and env keys.
     - Log warnings/errors and return empty results or simple JSON instead of throwing.
   - Some console logs (e.g., Deepgram TTS TTFB) are explicitly performance-focused.
+  - Planning failures fall back to direct answer mode gracefully.
+
 - Security posture:
   - API keys are always read from `process.env`; no secrets are hard-coded.
   - Clerk middleware protects both app and API routes by default, reducing risk of unauthenticated access to sensitive endpoints.
   - Shopping, YouTube, and search APIs do not expose raw env values back to the client.
+  - Firecrawl integration provides controlled web scraping with query-based extraction.
+
 - UX considerations:
   - Voice-first design with clear separation between text and voice flows, plus visual feedback for STT/TTS.
   - Rich but complex state in `SearchConversationShell`—well-suited for the current scope but could be a candidate for refactoring into smaller hooks or modules if the feature set grows.
   - Memory visualizations and `mem0` integration indicate focus on long-term user experience and personalization.
+  - Thinking blocks (phases) are surfaced in the UI to show the agent's reasoning process.
+  - Small talk and identity questions are handled efficiently with early exits.

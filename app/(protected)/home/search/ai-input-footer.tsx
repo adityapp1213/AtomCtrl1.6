@@ -1280,6 +1280,10 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
       isChatLoading || pendingStream !== null || chatSummaryStatus === "loading";
     if (inProgress) return;
     if (currentPlanMeta.completedCount >= currentPlanMeta.steps.length) return;
+    // Only perform final jump-to-end if timer has had enough time to progress steps
+    // Give timer at least 2 intervals (1800ms) to show progress, or if we already halfway through
+    const hasProgressed = currentPlanMeta.completedCount > 0;
+    if (!hasProgressed) return; // Wait for timer to start incrementing
     setCurrentPlanMeta((prev) =>
       prev ? { ...prev, completedCount: prev.steps.length } : prev
     );
@@ -2758,9 +2762,9 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                             <div className="shrink-0">
                               <AtomLogo size={28} className="text-foreground" />
                             </div>
-                            <div className="w-full pt-1">
+                            <div className="w-full pt-1 pb-24 md:pb-0">
                               {msg.planReasoning && (
-                                <div className="mb-3">
+                                <div className="mb-3 pb-20 md:pb-0">
                                   <Reasoning
                                     isStreaming={reasoningMessageId === msg.id}
                                   >
@@ -2826,9 +2830,9 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                                 <div className="shrink-0">
                                   <AtomLogo size={28} className="text-foreground" />
                                 </div>
-                                <div className="w-full pt-1">
+                              <div className="w-full pt-1 pb-24 md:pb-0">
                                   {msg.planReasoning && (
-                                    <div className="mb-3">
+                                    <div className="mb-3 pb-20 md:pb-0">
                                       <Reasoning
                                         isStreaming={reasoningMessageId === msg.id}
                                       >
@@ -3146,12 +3150,12 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                               key={step.id || idx}
                               className="flex items-start gap-2"
                             >
-                              <span className="mt-0.5 inline-flex h-4 w-4 items-center justify-center">
+                              <span className="mt-0.5 inline-flex h-5 w-5 md:h-4 md:w-4 items-center justify-center">
                                 <Image
                                   src={done ? "/check.png" : "/pending.png"}
                                   alt={done ? "Step complete" : "Step pending"}
-                                  width={14}
-                                  height={14}
+                                  width={20}
+                                  height={20}
                                 />
                               </span>
                               <span className="truncate">
@@ -3168,7 +3172,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                       className="rounded-2xl border border-border/60 bg-white/80 px-5 py-3 text-sm text-muted-foreground flex items-center justify-between"
                     >
                       <div className="flex items-center gap-3 min-w-0">
-                        <span className="inline-flex h-5 w-5 items-center justify-center">
+                        <span className="inline-flex h-6 w-6 md:h-5 md:w-5 items-center justify-center">
                           <Image
                             src={
                               currentPlanMeta.completedCount >=
@@ -3184,8 +3188,8 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                                 ? "Step complete"
                                 : "Step pending"
                             }
-                            width={18}
-                            height={18}
+                            width={20}
+                            height={20}
                           />
                         </span>
                         <span className="truncate">

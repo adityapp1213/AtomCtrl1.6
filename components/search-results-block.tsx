@@ -118,6 +118,22 @@ export function SearchResultsBlock({
     ? String(summary ?? "")
     : (summary || "").trim() || overallSummaryLines.filter(Boolean).join("\n");
   const hasAnyAnswerText = Boolean((displayText || "").trim());
+
+  // Helper to check if text has markdown/bullet formatting
+  const hasMarkdownFormatting = (text: string) => {
+    const raw = String(text || "").trim();
+    return (
+      /^[\s]*[-*+]\s/m.test(raw) ||
+      /^[\s]*\d+\.\s/m.test(raw) ||
+      /^[\s]*#{1,6}\s/m.test(raw) ||
+      /^[\s]*\|/m.test(raw) ||
+      raw.includes("\n- ") ||
+      raw.includes("\n* ") ||
+      raw.includes("**") ||
+      raw.includes("•")
+    );
+  };
+
   const fallbackFromSources =
     !hasAnyAnswerText && Array.isArray(webItems) && webItems.length > 0
       ? webItems
@@ -137,6 +153,14 @@ export function SearchResultsBlock({
   const formattedAnswerMarkdown = useMemo(() => {
     const raw = String(fullAnswerText || "").trim();
     if (!raw) return "";
+
+    // Check if text already has markdown formatting (bullets, headings, etc.)
+    // If so, don't reformat - just return as-is to avoid double formatting
+    if (hasMarkdownFormatting(raw)) {
+      return raw;
+    }
+
+    // Plain text - format it into a clean structure
     const q = (searchQuery || "").trim();
     const isQuestionLike =
       /\?/.test(q) ||

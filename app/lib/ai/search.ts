@@ -284,6 +284,19 @@ export async function summarizeItems(
     const summaries: SummItem[] = Array.isArray(parsed?.items) ? parsed.items : [];
     return { overallSummaryLines, summaries };
   } catch (err) {
+    const errMsg = String((err as Error)?.message || err);
+    if (errMsg.includes("image input") || errMsg.includes("clipboard")) {
+      console.warn("[ai:summarizeItems] Model doesn't support image input, returning raw summaries");
+      // Return raw summaries without AI processing
+      const rawSummaries: SummItem[] = trimmedItems.map((item, idx) => ({
+        index: idx,
+        summary_lines: [(item.title || "").slice(0, 200)],
+      }));
+      return {
+        overallSummaryLines: ["Unable to generate AI summary."],
+        summaries: rawSummaries,
+      };
+    }
     console.error("[ai:summarizeItems] Error summarizing items", err);
     return { overallSummaryLines: [], summaries: [] };
   }
@@ -348,6 +361,11 @@ export async function summarizeChatAnswerFromWebItems(
 
     return (resp?.text || "").trim();
   } catch (err) {
+    const errMsg = String((err as Error)?.message || err);
+    if (errMsg.includes("image input") || errMsg.includes("clipboard")) {
+      console.warn("[ai:summarizeChatAnswerFromWebItems] Model doesn't support image input");
+      return "I couldn't generate a summary for these results. The search results are displayed below.";
+    }
     console.error("[ai:summarizeChatAnswerFromWebItems] Error summarizing chat answer", err);
     return "";
   }
@@ -411,6 +429,11 @@ export async function summarizeChatAnswerFromShoppingItems(
 
     return (resp?.text || "").trim();
   } catch (err) {
+    const errMsg = String((err as Error)?.message || err);
+    if (errMsg.includes("image input") || errMsg.includes("clipboard")) {
+      console.warn("[ai:summarizeChatAnswerFromShoppingItems] Model doesn't support image input");
+      return "";
+    }
     console.error("[ai:summarizeChatAnswerFromShoppingItems] Error summarizing shopping answer", err);
     return "";
   }

@@ -31,9 +31,12 @@ export type GroqGenerateContentResult = {
 const MAX_RETRIES = 3;
 const INITIAL_RETRY_DELAY = 750;
 
-function safeJsonParse(s: string): unknown {
+function safeJsonParse(s: string | Record<string, unknown>): Record<string, unknown> {
+  if (typeof s === "object" && s !== null) {
+    return s as Record<string, unknown>;
+  }
   try {
-    return JSON.parse(s);
+    return JSON.parse(s as string);
   } catch {
     return {};
   }
@@ -137,15 +140,21 @@ export class GroqClient {
 
           const functionCalls: ToolCall[] = [];
           const msg = completion.choices?.[0]?.message;
-          const toolCalls = (msg as unknown as { tool_calls?: Array<{ function?: { name?: string; arguments?: string } }> })
+          const toolCalls = (msg as unknown as { tool_calls?: Array<{ function?: { name?: string; arguments?: string | Record<string, unknown> } }> })
             ?.tool_calls;
 
           if (Array.isArray(toolCalls)) {
             for (const tc of toolCalls) {
               const name = tc?.function?.name;
               if (!name) continue;
-              const argsRaw = tc?.function?.arguments ?? "{}";
-              functionCalls.push({ name, args: safeJsonParse(argsRaw) });
+              const argsRaw = tc?.function?.arguments;
+              let parsedArgs: unknown = {};
+              if (typeof argsRaw === "string") {
+                parsedArgs = safeJsonParse(argsRaw);
+              } else if (typeof argsRaw === "object" && argsRaw !== null) {
+                parsedArgs = argsRaw;
+              }
+              functionCalls.push({ name, args: parsedArgs });
             }
           }
 
@@ -164,12 +173,22 @@ export class GroqClient {
             text = String(rawContent);
           }
 
-          if (!String(text || "").trim()) {
+          const hasFunctionCalls = Array.isArray(toolCalls) && toolCalls.length > 0;
+
+          if (!String(text || "").trim() && !hasFunctionCalls) {
             console.error("[GroqClient] Empty completion content", {
               model,
-              hasToolCalls: Array.isArray(toolCalls) && toolCalls.length > 0,
+              hasToolCalls: false,
             });
             throw new Error("[GroqClient] Model returned empty content");
+          }
+
+          // Check for tool call parsing errors in the response
+          const finishReason = (msg as unknown as { finish_reason?: string })?.finish_reason;
+          if (finishReason === "invalid_tool_calls" || finishReason === "tool_use_failed") {
+            const err = new Error(`[GroqClient] Model failed to generate valid tool calls: ${finishReason}`);
+            (err as any).isToolParseError = true;
+            throw err;
           }
 
           return { text, functionCalls };

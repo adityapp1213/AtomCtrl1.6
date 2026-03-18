@@ -19,7 +19,7 @@ import {
   type WeatherItem,
 } from "@/app/lib/weather";
 import { detectIntent } from "@/app/lib/ai/genai";
-import { DETECT_INTENT_SYSTEM_PROMPT } from "@/app/lib/ai/system-prompts";
+import { DETECT_INTENT_SYSTEM_PROMPT, COMPACT_SYSTEM_PROMPT } from "@/app/lib/ai/system-prompts";
 import { scrapeUrls, type ScrapedUrlSummary } from "@/app/lib/ai/firecrawl";
 import type { DynamicSearchResult } from "@/app/actions/search";
 
@@ -31,6 +31,59 @@ export type PlannedTool =
   | "shopping_search"
   | "weather_city"
   | "scrape_urls";
+
+export type GroqTool = {
+  type: "function";
+  function: {
+    name: string;
+    description?: string;
+    parameters?: unknown;
+  };
+};
+
+const PLANNER_TOOLS: GroqTool[] = [
+  {
+    type: "function",
+    function: {
+      name: "plan",
+      description: "Plan the steps to answer the user's query. ALWAYS call this tool to return structured JSON. The model SHOULD call multiple tools in parallel when needed (e.g., web_search + youtube_search for news briefings, shopping_search + web_search for shopping decisions).",
+      parameters: {
+        type: "object",
+        properties: {
+          mode: {
+            type: "string",
+            enum: ["answer", "plan"],
+            description: "Whether to answer directly (answer) or use tools (plan). Use 'plan' when search/web/youtube/shopping/tools are needed.",
+          },
+          reasoning: {
+            type: "string",
+            description: "Brief explanation of WHY this plan was chosen, including which Rule from the Tool Matrix was applied and what the user is trying to accomplish.",
+          },
+          steps: {
+            type: "array",
+            description: "Ordered list of tool steps to execute. For complex queries, include MULTIPLE parallel steps (e.g., web_search + youtube_search for news). Each tool that canRunInParallel should be run simultaneously.",
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "string", description: "Unique step identifier like s1, s2, s3" },
+                description: { type: "string", description: "What this step accomplishes" },
+                tool: {
+                  type: "string",
+                  enum: ["answer", "web_search", "image_search", "youtube_search", "shopping_search", "weather_city", "scrape_urls"],
+                  description: "Tool to execute. Use web_search for news/facts/opinions. Use youtube_search for videos/tutorials/recaps. Use shopping_search for products/prices. Use image_search for visual content. Use weather_city for weather. Use scrape_urls for specific URLs.",
+                },
+                canRunInParallel: { type: "boolean", description: "TRUE if this step can run at the same time as other steps. Set to FALSE only if this step needs results from another step." },
+                query: { type: "string", description: "Search query for this tool. Keep it focused: 2-5 high-signal words. E.g., 'best places visit India Taj Mahal' not 'I want to find the best places to visit in India besides the Taj Mahal'" },
+              },
+              required: ["id", "description", "tool", "canRunInParallel"],
+            },
+          },
+        },
+        required: ["mode", "reasoning", "steps"],
+      },
+    },
+  },
+];
 
 export type PlannedStep = {
   id: string;
@@ -114,7 +167,7 @@ function extractUrlsFromText(value: string) {
 function looksLikeSmallTalkQuery(query: string) {
   const raw = (query ?? "").trim().toLowerCase();
   if (!raw) return false;
-  if (raw.length > 80) return false;
+  if (raw.length > 150) return false;
   const oneWord = raw.replace(/[!?.,]/g, "").trim();
   const allowed = new Set([
     "hi",
@@ -138,6 +191,9 @@ function looksLikeSmallTalkQuery(query: string) {
   ]);
   if (allowed.has(oneWord)) return true;
   if (/\b(thank you|thanks a lot|appreciate it)\b/.test(raw)) return true;
+  // Catch emotional expressions and complaints: "ugh", "oof", "meh", "sucks", "bad day", "not feeling", etc.
+  if (/\b(ugh|oof|meh|darn|argh|yikes|yikes)\b/.test(raw)) return true;
+  if (/\b(bad day|rough day|terrible day|awful day|sucks|sucks?|feeling.*bad|not.*feeling|no.*good)\b/.test(raw)) return true;
   return false;
 }
 
@@ -218,45 +274,7 @@ function extractFollowupTopic(contextLines: string[], query: string) {
   return { topic: stripCodeForSearchTopic(best) };
 }
 
-const PLANNER_SYSTEM_PROMPT =
-  "You are Cloudy, a voice-first AI assistant from Atom Ctrl by Atom Technologies.\n" +
-  "\n" +
-  "Core rules (apply to planning):\n" +
-  "- Reduce cognitive load: infer intent, choose right depth, respond clearly.\n" +
-  "- For DATE/TIME queries ('what date', 'what time now', 'what day today'): ALWAYS use web_search.\n" +
-  "- For PLACE queries (hours, address, 'is X open', events): ALWAYS use google_maps + web_search.\n" +
-  "- Never guess live data from training knowledge. Always search if time-sensitive.\n" +
-  "- Use MULTIPLE tools in parallel when they add clear value.\n" +
-  "\n" +
-  "—— PLANNER SPECIALIZATION ——\n" +
-  "You are Cloudy's planning module.\n" +
-  "\n" +
-  "Goal:\n" +
-  "- Decide if query needs direct answer OR multi-step tool plan.\n" +
-  "- Set mode='answer' for casual chat, knowledge-based answers, code explanations.\n" +
-  "- Set mode='plan' for factual lookups, comparisons, tutorials, product research.\n" +
-  "\n" +
-  "Available tools:\n" +
-  "- answer           → direct knowledge (no external calls).\n" +
-  "- web_search       → web pages, docs, articles.\n" +
-  "- image_search     → illustrative images (run parallel with web_search).\n" +
-  "- youtube_search   → tutorial/demo videos.\n" +
-  "- shopping_search  → products, deals, pricing.\n" +
-  "- weather_city     → weather in a city.\n" +
-  "- scrape_urls      → deep page analysis from URLs.\n" +
-  "\n" +
-  "Planning rules:\n" +
-  "- Group parallel tools (web_search + image_search + youtube_search together).\n" +
-  "- scrape_urls runs AFTER web_search for deeper insight (not parallel).\n" +
-  "- For each tool step, provide a 'query' field with the exact search phrase.\n" +
-  "- In 'description', prefix query with '§' marker: 'Search for X § [exact_query]'.\n" +
-  "- If user says 'it/this/that/explain/rewrite', identify what they reference:\n" +
-  "  - Recent assistant answer → use answer mode, no tools.\n" +
-  "  - Recent search topic → use plan mode with refined query.\n" +
-  "- For casual chat/jokes/greetings → answer mode only.\n" +
-  "\n" +
-  "Output:\n" +
-  "- Return ONLY strict JSON: {\"mode\": \"answer\"|\"plan\", \"reasoning\": string, \"steps\": [{\"id\", \"description\", \"tool\", \"canRunInParallel\", \"query\"?}, ...]}\n";
+const PLANNER_SYSTEM_PROMPT = COMPACT_SYSTEM_PROMPT;
 
 export async function planQuerySteps(
   query: string,
@@ -324,15 +342,108 @@ export async function planQuerySteps(
     context: minimalContext,
   };
 
-  const result = await client.generateContent(
-    "openai/gpt-oss-20b",
-    JSON.stringify(payload),
-    {
-      systemInstruction: {
-        parts: [{ text: PLANNER_SYSTEM_PROMPT }],
-      },
+  let result: Awaited<ReturnType<typeof client.generateContent>>;
+  try {
+    result = await client.generateContent(
+      "openai/gpt-oss-20b",
+      JSON.stringify(payload),
+      {
+        tools: PLANNER_TOOLS,
+        systemInstruction: {
+          parts: [{ text: PLANNER_SYSTEM_PROMPT }],
+        },
+      }
+    );
+  } catch (err) {
+    const errorMsg = String((err as Error)?.message || err);
+    const isToolParseError = (err as any)?.isToolParseError;
+    // If Groq fails to parse tool call arguments, fall back to simple search
+    if (isToolParseError || errorMsg.includes("Failed to parse tool call arguments")) {
+      console.warn("[planQuerySteps] Tool call parsing failed, falling back to text parsing");
+      return {
+        mode: "plan" as PlanMode,
+        reasoning: "Using fallback planning due to tool parsing issue.",
+        steps: [
+          {
+            id: "s1",
+            description: `Search the web for: ${stripCodeForSearchTopic(trimmed)}`,
+            tool: "web_search",
+            canRunInParallel: false,
+            query: stripCodeForSearchTopic(trimmed),
+          },
+        ],
+      };
     }
-  );
+    throw err;
+  }
+
+  // Handle tool call response
+  if (result.functionCalls && result.functionCalls.length > 0) {
+    const fc = result.functionCalls[0];
+    if (fc.name === "plan" && fc.args) {
+      const args = fc.args as { mode?: string; reasoning?: string; steps?: PlannedStep[] };
+      let steps: PlannedStep[] = args.steps || [];
+      const mode: PlanMode = (args.mode as "answer" | "plan") || "plan";
+      const reasoning = args.reasoning || "";
+
+      // Apply tool augmentation
+      if (!steps.length) {
+        steps.push({
+          id: "s1",
+          description: "Answer directly from existing knowledge.",
+          tool: "answer",
+          canRunInParallel: false,
+        });
+      }
+
+      const fallbackToolQuery = stripCodeForSearchTopic(trimmed);
+      for (const step of steps) {
+        if (step.tool === "answer") continue;
+        if (!step.query && fallbackToolQuery) {
+          step.query = fallbackToolQuery.slice(0, 180);
+        }
+      }
+
+      for (const step of steps) {
+        if (step.tool === "answer") continue;
+        if (!step.query) continue;
+        if (step.description.includes("§")) continue;
+        const next = `${step.description} § ${step.query}`.trim();
+        step.description = next.length > 280 ? next.slice(0, 280) : next;
+      }
+
+      if (
+        mode === "plan" &&
+        steps.some((s) => s.tool === "web_search") &&
+        !steps.some((s) => s.tool === "image_search")
+      ) {
+        const insertAt = Math.max(0, steps.findIndex((s) => s.tool === "web_search") + 1);
+        steps.splice(insertAt, 0, {
+          id: `s${steps.length + 1}`,
+          description: "Search images to provide an illustrative carousel.",
+          tool: "image_search",
+          canRunInParallel: true,
+        });
+      }
+
+      if (
+        mode === "plan" &&
+        steps.some((s) => s.tool === "web_search") &&
+        !steps.some((s) => s.tool === "scrape_urls") &&
+        /\b(read|scrape|deep dive|full page|from the page|from the site|from the link|jobs?|career|careers|hiring|apply|openings?|roles?|positions?|people|person|team|staff|contact|email|linkedin)\b/i.test(trimmed)
+      ) {
+        const insertAt = Math.max(0, steps.findIndex((s) => s.tool === "web_search") + 1);
+        steps.splice(insertAt, 0, {
+          id: `s${steps.length + 1}`,
+          description: "Scrape the top links for deeper page-level detail.",
+          tool: "scrape_urls",
+          canRunInParallel: false,
+        });
+      }
+
+      return { mode, reasoning, steps };
+    }
+  }
 
   const text = (result?.text || "").trim();
   let json: any;
@@ -453,18 +564,7 @@ export async function planQuerySteps(
   return { mode, reasoning, steps };
 }
 
-const ANSWER_SYSTEM_PROMPT =
-  DETECT_INTENT_SYSTEM_PROMPT +
-  "\n" +
-  "\n" +
-  "This request is for generating the assistant's final user-facing answer.\n" +
-  "- Use the provided JSON payload fields: query, context, and topic (if present).\n" +
-  "- If the user is asking a follow-up (short reply, pronouns like it/this/that, or requests like tutorial/guide), you MUST decide which earlier turn they refer to by inspecting the conversation context.\n" +
-  "  - Prefer the most recent assistant answer in the window when the follow-up sounds like editing, clarifying, or restructuring an answer (for example: \"make it shorter\", \"explain it in blocks\", \"break it down\").\n" +
-  "  - Prefer the latest web search topic only when the follow-up clearly refers to search results or repeats that topic by name.\n" +
-  "  - Treat the `topic` field as a hint; if it conflicts with the most likely target from context, follow the conversation context instead.\n" +
-  "- Do not define generic terms like \"what is a tutorial\" unless the user explicitly asks.\n" +
-  "- Do not mention tools, planning, or internal reasoning.\n";
+const ANSWER_SYSTEM_PROMPT = COMPACT_SYSTEM_PROMPT;
 
 export async function answerQueryDirect(
   query: string,
@@ -472,10 +572,6 @@ export async function answerQueryDirect(
 ): Promise<string> {
   const trimmed = (query || "").trim();
   if (!trimmed) return "";
-
-  if (looksLikeSmallTalkQuery(trimmed)) {
-    return "Hi! What can I help you with?";
-  }
 
   const lower = trimmed.toLowerCase();
   const isIdentityQuestion =
