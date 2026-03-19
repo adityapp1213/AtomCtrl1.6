@@ -1,4 +1,3 @@
-import { GeminiClient } from "./gemini-client";
 import { GroqClient } from "./groq/groq-client";
 import { DETECT_INTENT_SYSTEM_PROMPT } from "./system-prompts";
 
@@ -240,17 +239,15 @@ export async function imageSearch(
 export async function summarizeItems(
   items: RawItem[],
   query?: string,
-  providerOverride?: "gemini" | "groq"
+  providerOverride?: "groq"
 ): Promise<{ overallSummaryLines: string[]; summaries: SummItem[] }> {
   if (!Array.isArray(items) || !items.length) {
     return { overallSummaryLines: [], summaries: [] };
   }
 
   const hasGroqKey = Boolean(process.env.GROQ_API_KEY || process.env.OPEN_AI_API_KEY);
-  const hasGeminiKey = Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY);
-  const provider = (providerOverride || process.env.AI_PROVIDER || (hasGroqKey ? "groq" : "gemini")).toLowerCase();
 
-  if (!(hasGroqKey || hasGeminiKey)) {
+  if (!hasGroqKey) {
     return { overallSummaryLines: [], summaries: [] };
   }
 
@@ -270,12 +267,9 @@ export async function summarizeItems(
       "plain-text lines summarizing that specific result. " +
       `Use this data: ${JSON.stringify(trimmedItems)}`;
 
-    const resp =
-      provider === "groq" && hasGroqKey
-        ? await GroqClient.getInstance().generateContent("openai/gpt-oss-20b", prompt, {
-            systemInstruction: { parts: [{ text: CLOUDY_SUMMARY_SYSTEM_PROMPT }] },
-          })
-        : await GeminiClient.getInstance().generateContent("gemini-2.5-flash", prompt);
+    const resp = await GroqClient.getInstance().generateContent("openai/gpt-oss-20b", prompt, {
+      systemInstruction: { parts: [{ text: CLOUDY_SUMMARY_SYSTEM_PROMPT }] },
+    });
 
     const parsed = extractJson(resp?.text || "");
     const overallSummaryLines: string[] = Array.isArray(parsed?.overall_summary_lines)
@@ -287,7 +281,6 @@ export async function summarizeItems(
     const errMsg = String((err as Error)?.message || err);
     if (errMsg.includes("image input") || errMsg.includes("clipboard")) {
       console.warn("[ai:summarizeItems] Model doesn't support image input, returning raw summaries");
-      // Return raw summaries without AI processing
       const rawSummaries: SummItem[] = trimmedItems.map((item, idx) => ({
         index: idx,
         summary_lines: [(item.title || "").slice(0, 200)],
@@ -305,16 +298,14 @@ export async function summarizeItems(
 export async function summarizeChatAnswerFromWebItems(
   items: WebItemSummary[],
   query?: string,
-  providerOverride?: "gemini" | "groq"
+  providerOverride?: "groq"
 ): Promise<string> {
   const trimmedItems = Array.isArray(items) ? items.slice(0, 4) : [];
   if (!trimmedItems.length) return "";
 
   const hasGroqKey = Boolean(process.env.GROQ_API_KEY || process.env.OPEN_AI_API_KEY);
-  const hasGeminiKey = Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY);
-  const provider = (providerOverride || process.env.AI_PROVIDER || (hasGroqKey ? "groq" : "gemini")).toLowerCase();
 
-  if (!(hasGroqKey || hasGeminiKey)) {
+  if (!hasGroqKey) {
     return "";
   }
 
@@ -352,12 +343,9 @@ export async function summarizeChatAnswerFromWebItems(
     const prompt =
       basePrompt + stylePrompt + linkPrompt + `Sources: ${JSON.stringify(sourcePayload)}`;
 
-    const resp =
-      provider === "groq" && hasGroqKey
-        ? await GroqClient.getInstance().generateContent("openai/gpt-oss-20b", prompt, {
-            systemInstruction: { parts: [{ text: CLOUDY_SUMMARY_SYSTEM_PROMPT }] },
-          })
-        : await GeminiClient.getInstance().generateContent("gemini-2.5-flash", prompt);
+    const resp = await GroqClient.getInstance().generateContent("openai/gpt-oss-20b", prompt, {
+      systemInstruction: { parts: [{ text: CLOUDY_SUMMARY_SYSTEM_PROMPT }] },
+    });
 
     return (resp?.text || "").trim();
   } catch (err) {
@@ -383,16 +371,14 @@ type ShoppingItemSummary = {
 export async function summarizeChatAnswerFromShoppingItems(
   items: ShoppingItemSummary[],
   query?: string,
-  providerOverride?: "gemini" | "groq"
+  providerOverride?: "groq"
 ): Promise<string> {
   const trimmedItems = Array.isArray(items) ? items.slice(0, 4) : [];
   if (!trimmedItems.length) return "";
 
   const hasGroqKey = Boolean(process.env.GROQ_API_KEY || process.env.OPEN_AI_API_KEY);
-  const hasGeminiKey = Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY);
-  const provider = (providerOverride || process.env.AI_PROVIDER || (hasGroqKey ? "groq" : "gemini")).toLowerCase();
 
-  if (!(hasGroqKey || hasGeminiKey)) {
+  if (!hasGroqKey) {
     return "";
   }
 
@@ -422,10 +408,7 @@ export async function summarizeChatAnswerFromShoppingItems(
       "After the bullets, you may add one short sentence explaining which option is best overall. " +
       `Products: ${JSON.stringify(sourcePayload)}`;
 
-    const resp =
-      provider === "groq" && hasGroqKey
-        ? await GroqClient.getInstance().generateContent("openai/gpt-oss-20b", prompt)
-        : await GeminiClient.getInstance().generateContent("gemini-2.5-flash", prompt);
+    const resp = await GroqClient.getInstance().generateContent("openai/gpt-oss-20b", prompt);
 
     return (resp?.text || "").trim();
   } catch (err) {

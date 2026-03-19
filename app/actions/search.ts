@@ -1,6 +1,6 @@
 "use server";
 
-import { detectIntent } from "@/app/lib/ai/genai";
+import { detectIntent, generateSmallTalkReply, looksLikeSmallTalk } from "@/app/lib/ai/genai";
 import {
   webSearch,
   imageSearch,
@@ -11,10 +11,8 @@ import {
 import { youtubeSearch, YouTubeVideo } from "@/app/lib/ai/youtube";
 import { fetchWeatherForCity, WeatherItem } from "@/app/lib/weather";
 import { cookies } from "next/headers";
-import { mem0AddTurn, mem0SearchForContext, type Mem0Operation } from "@/app/lib/mem0";
 import { GroqClient } from "@/app/lib/ai/groq/groq-client";
 import { shoppingSearch, type ShoppingProduct } from "@/app/lib/serpapi/shopping";
-import { readConversationMemoryForQuery } from "./memory-read";
 
 function looksLikeRefersToPreviousResults(q: string): boolean {
   const raw = (q || "").trim().toLowerCase();
@@ -92,7 +90,6 @@ function extractExplicitSearchQuery(q: string): string | null {
 export type DynamicSearchResult = {
   type: "text" | "search";
   content?: string;
-  mem0Ops?: Mem0Operation[];
   data?: {
     searchQuery: string;
     overallSummaryLines: string[];
@@ -116,118 +113,6 @@ export type PerformSearchOptions = {
   shoppingLocation?: string | null;
 };
 
-export type MemoryWindowTurn = {
-  role: "user" | "assistant";
-  type: "text" | "search";
-  text: string;
-  search?: { searchQuery?: string; overallSummary?: string[] };
-};
-
-export type MemoryWindowInput = {
-  windowKey: string;
-  turns: MemoryWindowTurn[];
-  userId?: string | null;
-  sessionId?: string | null;
-};
-
-export type MemoryExtractionResult = {
-  windowKey: string;
-  permanentFacts: string[];
-  conversationSummary: string | null;
-};
-
-function extractJsonObject(raw: string): unknown {
-  const text = String(raw ?? "").trim();
-  if (!text) return null;
-  const first = text.indexOf("{");
-  const last = text.lastIndexOf("}");
-  const candidate = first >= 0 && last > first ? text.slice(first, last + 1) : text;
-  try {
-    return JSON.parse(candidate);
-  } catch {
-    return null;
-  }
-}
-
-function normalizeMemoryFacts(value: unknown): string[] {
-  const arr = Array.isArray(value) ? value : [];
-  const cleaned = arr
-    .map((item) => String(item ?? "").trim())
-    .filter(Boolean)
-    .map((item) => item.slice(0, 200));
-  return Array.from(new Set(cleaned)).slice(0, 10);
-}
-
-function normalizeSummary(value: unknown): string | null {
-  const text = String(value ?? "").trim();
-  if (!text) return null;
-  return text.slice(0, 400);
-}
-
-export async function extractMemoryFromWindow(
-  input: MemoryWindowInput
-): Promise<MemoryExtractionResult> {
-  const windowKey = String(input?.windowKey ?? "");
-  const turns = Array.isArray(input?.turns) ? input.turns : [];
-  if (!windowKey || turns.length === 0) {
-    return { windowKey, permanentFacts: [], conversationSummary: null };
-  }
-
-  const hasGroqKey = Boolean(process.env.GROQ_API_KEY || process.env.OPEN_AI_API_KEY);
-  if (!hasGroqKey) {
-    return { windowKey, permanentFacts: [], conversationSummary: null };
-  }
-
-  const compactTurns = turns.map((t) => ({
-    role: t.role,
-    type: t.type,
-    text: String(t.text ?? "").slice(0, 500),
-    search: t.search
-      ? {
-          searchQuery: t.search.searchQuery ? String(t.search.searchQuery).slice(0, 200) : undefined,
-          overallSummary: Array.isArray(t.search.overallSummary)
-            ? t.search.overallSummary.map((s) => String(s ?? "").slice(0, 200)).filter(Boolean).slice(0, 3)
-            : undefined,
-        }
-      : undefined,
-  }));
-
-  const systemInstruction = {
-    parts: [
-      {
-        text:
-          "You extract memory from a short conversation window. Return only strict JSON with keys " +
-          '"permanent_facts" (array of short strings) and "conversation_summary" (short string). ' +
-          "Only include facts explicitly stated by the user. If nothing is suitable, return empty array and empty string.",
-      },
-    ],
-  };
-
-  const userText = `ConversationWindow: ${JSON.stringify({ turns: compactTurns })}`;
-
-  const result = await GroqClient.getInstance().generateContent("openai/gpt-oss-20b", userText, {
-    systemInstruction,
-  });
-
-  const parsed = extractJsonObject(result?.text ?? "");
-  const permanentFacts = normalizeMemoryFacts(
-    (parsed as any)?.permanent_facts ?? (parsed as any)?.permanentFacts
-  );
-  const conversationSummary = normalizeSummary(
-    (parsed as any)?.conversation_summary ?? (parsed as any)?.conversationSummary
-  );
-
-  if (input?.userId && permanentFacts.length > 0) {
-    await mem0AddTurn(
-      permanentFacts.map((fact) => ({ role: "user", content: fact })),
-      { userId: input.userId, sessionId: input.sessionId ?? undefined },
-      { category: "permanent_memory", source: "groq", window_key: windowKey }
-    );
-  }
-
-  return { windowKey, permanentFacts, conversationSummary };
-}
-
 export async function performDynamicSearch(
   query: string,
   options?: PerformSearchOptions
@@ -235,12 +120,16 @@ export async function performDynamicSearch(
   const trimmed = (query || "").trim();
   if (!trimmed) return { type: "text", content: "" };
 
+  if (looksLikeSmallTalk(trimmed)) {
+    const reply = await generateSmallTalkReply(trimmed);
+    return { type: "text", content: reply };
+  }
+
   const explicitShoppingQuery = extractShoppingQuery(trimmed);
   const explicitSearchQuery = extractExplicitSearchQuery(trimmed);
   const shoppingLocation = (options?.shoppingLocation || "").trim() || null;
 
-  const jar = await cookies();
-  const aiProvider = jar.get("ai_provider")?.value === "gemini" ? "gemini" : "groq";
+  const aiProvider = "groq";
 
   const baseContext = options?.context ?? [];
 
@@ -273,79 +162,7 @@ export async function performDynamicSearch(
 
   const isAskCloudy = Boolean(askCloudyContext && askCloudyContext.kind === "ask_cloudy_context");
 
-  const mem0Ops: Mem0Operation[] = [];
-
-  const lowerForMem = trimmed.toLowerCase();
-  const isNameQuery =
-    /(\bmy name\b|\bwhat is my name\b|\bwhat'?s my name\b|\bwhats my name\b|\bwho am i\b|\bdo you remember my name\b|\bremember my name\b|\bdo you know my name\b)/i.test(lowerForMem);
-  const isRecallQuery =
-    /\bwhat do you remember\b/.test(lowerForMem) ||
-    /\bwhat do you know\b/.test(lowerForMem) ||
-    /\bwhat do you know about me\b/.test(lowerForMem) ||
-    /\bwhat have i told you\b/.test(lowerForMem);
-  const memQuery = isNameQuery ? "name" : isRecallQuery ? "profile preferences history" : trimmed;
-
-  const memContextResult =
-    options?.userId && process.env.MEM0_API_KEY && !isAskCloudy
-      ? await mem0SearchForContext(memQuery, { userId: options.userId, sessionId: options.sessionId ?? undefined })
-      : { lines: [], used: false };
-
-  if (memContextResult.used) {
-    mem0Ops.push("search");
-  }
-
-  const memContext = memContextResult.lines;
-
-  const combinedContext = [...baseContext, ...memContext];
-
-  if (options?.userId) {
-    const lower = trimmed.toLowerCase();
-    const looksLikeMemoryRecall =
-      /\bremember\b/.test(lower) || /\brecall\b/.test(lower) || /\bwhat did i say\b/.test(lower);
-
-    if (looksLikeMemoryRecall) {
-      const memoryAnswer = await readConversationMemoryForQuery(trimmed, options.userId);
-      if (memoryAnswer) {
-        if (options.userId) {
-          mem0Ops.push("add");
-          void mem0AddTurn(
-            [
-              { role: "user", content: trimmed },
-              { role: "assistant", content: memoryAnswer.content },
-            ],
-            { userId: options.userId, sessionId: options.sessionId ?? undefined },
-            { category: "memory", mode: "text" }
-          );
-        }
-
-        return {
-          type: "search",
-          content: memoryAnswer.content,
-          mem0Ops,
-          data: {
-            searchQuery: memoryAnswer.title,
-            overallSummaryLines: [memoryAnswer.summary, ""],
-            summary: memoryAnswer.summary,
-            webItems: [
-              {
-                link: `memory://${memoryAnswer.chatId}`,
-                title: memoryAnswer.title,
-                summaryLines: [memoryAnswer.summary],
-                imageUrl: undefined,
-              },
-            ],
-            mediaItems: [],
-            weatherItems: [],
-            youtubeItems: [],
-            shoppingItems: [],
-            shouldShowTabs: false,
-            mapLocation: undefined,
-            googleMapsKey: undefined,
-          },
-        };
-      }
-    }
-  }
+  const combinedContext = [...baseContext];
 
   const lastSearchQueryFromContext: string | null =
     typeof conversationContext?.latest_search?.searchQuery === "string"
@@ -361,7 +178,7 @@ export async function performDynamicSearch(
   }
 
   const detectQuery = explicitShoppingQuery || resolvedExplicitSearchQuery || trimmed;
-  const intent = await detectIntent(detectQuery, combinedContext, aiProvider);
+  const intent = await detectIntent(detectQuery, combinedContext);
 
   const shoppingQuery = intent.shoppingQuery || explicitShoppingQuery || null;
   const forceSearchTabs = Boolean(resolvedExplicitSearchQuery);
@@ -372,22 +189,9 @@ export async function performDynamicSearch(
     const lines = Array.isArray(raw) ? raw.filter(Boolean) : [];
     const content = lines.length > 0 ? lines.join(" ") : "Cloudy could not generate a summary for this query.";
 
-    if (options?.userId) {
-      mem0Ops.push("add");
-      void mem0AddTurn(
-        [
-          { role: "user", content: trimmed },
-          { role: "assistant", content },
-        ],
-        { userId: options.userId, sessionId: options.sessionId ?? undefined },
-        { category: "conversation", mode: "text" }
-      );
-    }
-
     return {
       type: "text",
       content,
-      mem0Ops,
     };
   }
 
@@ -510,21 +314,8 @@ export async function performDynamicSearch(
 
   const summaryText = overallSummaryLines.filter(Boolean).join(" ");
 
-  if (options?.userId) {
-    mem0Ops.push("add");
-    void mem0AddTurn(
-      [
-        { role: "user", content: trimmed },
-        { role: "assistant", content: summaryText || `Search results for: ${searchQuery}` },
-      ],
-      { userId: options.userId, sessionId: options.sessionId ?? undefined },
-      { category: "search", mode: "tabs" }
-    );
-  }
-
   return {
     type: "search",
-    mem0Ops,
     data: {
       searchQuery,
       overallSummaryLines,
@@ -550,8 +341,7 @@ export async function fetchWebTabData(searchQuery: string): Promise<WebTabData> 
   const q = (searchQuery || "").trim();
   if (!q) return { overallSummaryLines: [], webItems: [] };
 
-  const jar = await cookies();
-  const aiProvider = jar.get("ai_provider")?.value === "gemini" ? "gemini" : "groq";
+  const aiProvider = "groq";
 
   const rawWebItems = await webSearch(q);
   if (!rawWebItems.length) return { overallSummaryLines: ["No results found.", ""], webItems: [] };
@@ -584,7 +374,6 @@ export async function generateChatSummaryFromWebItems(
   if (!q) return "";
   const trimmedItems = Array.isArray(webItems) ? webItems.slice(0, 3) : [];
   if (!trimmedItems.length) return "";
-  const jar = await cookies();
-  const aiProvider = jar.get("ai_provider")?.value === "gemini" ? "gemini" : "groq";
+  const aiProvider = "groq";
   return summarizeChatAnswerFromWebItems(trimmedItems, q, aiProvider);
 }

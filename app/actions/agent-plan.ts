@@ -21,6 +21,7 @@ import {
 import { detectIntent } from "@/app/lib/ai/genai";
 import { DETECT_INTENT_SYSTEM_PROMPT, COMPACT_SYSTEM_PROMPT } from "@/app/lib/ai/system-prompts";
 import { scrapeUrls, type ScrapedUrlSummary } from "@/app/lib/ai/firecrawl";
+import { trimContextToTokenBudget } from "@/app/lib/ai/token-utils";
 import type { DynamicSearchResult } from "@/app/actions/search";
 
 export type PlannedTool =
@@ -337,12 +338,7 @@ export async function planQuerySteps(
   }
 
   const client = GroqClient.getInstance();
-  // AGGRESSIVE context reduction for fast planning
-  // Each message can be up to 500 chars, so 5 messages = 2500 chars max
-  const minimalContext = contextLines.slice(-5).filter((line) => {
-    const trimmed = line.trim();
-    return trimmed.length > 0 && trimmed.length < 300; // Skip long lines
-  });
+  const minimalContext = trimContextToTokenBudget(contextLines, 1500);
   const payload = {
     query: trimmed,
     context: minimalContext,
@@ -624,11 +620,7 @@ export async function answerQueryDirect(
 
   const client = GroqClient.getInstance();
   const topic = extractFollowupTopic(contextLines, trimmed).topic;
-  // AGGRESSIVE context reduction for fast answers
-  const minimalContext = contextLines.slice(-3).filter((line) => {
-    const trimmed2 = line.trim();
-    return trimmed2.length > 0 && trimmed2.length < 200;
-  });
+  const minimalContext = trimContextToTokenBudget(contextLines, 1200);
   const payload = {
     query: trimmed,
     context: minimalContext,
@@ -715,9 +707,7 @@ export async function runAgentPlan(
     return { type: "text", content: answer };
   }
 
-  const jar = await cookies();
-  const aiProvider =
-    jar.get("ai_provider")?.value === "gemini" ? "gemini" : "groq";
+  const aiProvider = "groq";
 
   const needsWeb = toolSteps.some((s) => s.tool === "web_search");
   const needsImages = toolSteps.some((s) => s.tool === "image_search");
@@ -838,7 +828,6 @@ export async function runAgentPlan(
           urls,
           query: trimmed,
           mode,
-          providerOverride: aiProvider,
         });
         return { tool, value: scraped };
       }
@@ -856,8 +845,17 @@ export async function runAgentPlan(
   let weatherItem: any = null;
 
   for (const batch of batches) {
-    const results = await Promise.all(batch.map((s) => runTool(s)));
-    for (const r of results) {
+    const settled = await Promise.allSettled(batch.map((s) => runTool(s)));
+
+    settled
+      .filter((r) => r.status === "rejected")
+      .forEach((r) =>
+        console.warn("[agent-plan] Tool failed silently:", (r as PromiseRejectedResult).reason)
+      );
+
+    for (const settledResult of settled) {
+      if (settledResult.status !== "fulfilled") continue;
+      const r = settledResult.value;
       if (r.tool === "web_search" && Array.isArray(r.value)) rawWebItems = r.value;
       if (r.tool === "image_search" && Array.isArray(r.value)) rawMedia = r.value;
       if (r.tool === "youtube_search" && Array.isArray(r.value)) yt = r.value;

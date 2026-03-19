@@ -1,4 +1,4 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 
 export const initChat = mutation({
@@ -13,8 +13,9 @@ export const initChat = mutation({
 
     const existingChat = await ctx.db
       .query("chats")
-      .filter((q) => q.eq(q.field("userId"), userId))
-      .filter((q) => q.eq(q.field("sessionId"), sessionId))
+      .withIndex("by_user_session", (q) =>
+        q.eq("userId", userId).eq("sessionId", sessionId)
+      )
       .first();
 
     if (existingChat) {
@@ -57,11 +58,10 @@ export const listUserChats = query({
 
     const chats = await ctx.db
       .query("chats")
-      .filter((q) => q.eq(q.field("userId"), userId))
+      .withIndex("by_user_session", (q) => q.eq("userId", userId))
       .collect();
 
     const nonEmpty = chats.filter((chat) => (chat.count ?? 0) >= 1);
-
     nonEmpty.sort((a, b) => b.updatedAt - a.updatedAt);
 
     return nonEmpty.map((chat) => ({
@@ -159,8 +159,9 @@ export const writeResponse = mutation({
 
     const existingChat = await ctx.db
       .query("chats")
-      .filter((q) => q.eq(q.field("userId"), userId))
-      .filter((q) => q.eq(q.field("sessionId"), sessionId))
+      .withIndex("by_user_session", (q) =>
+        q.eq("userId", userId).eq("sessionId", sessionId)
+      )
       .first();
 
     let chatId = existingChat?._id;
@@ -184,6 +185,11 @@ export const writeResponse = mutation({
       }
     }
 
+    const reasoningArg = typeof reasoning === "string" ? reasoning : null;
+    const dataObj = data as Record<string, unknown> | null;
+    const reasoningFromData = typeof dataObj?.reasoning === "string" ? dataObj.reasoning : null;
+    const finalReasoning = reasoningArg ?? reasoningFromData;
+
     const responseId = await ctx.db.insert(
       "responses",
       {
@@ -192,16 +198,16 @@ export const writeResponse = mutation({
         sessionId,
         promptId: promptId ?? null,
         responseType,
-        ...(typeof reasoning === "string" ? { reasoning } : {}),
+        ...(finalReasoning ? { reasoning: finalReasoning } : {}),
         content: content ?? "",
-        data: data ?? null,
+        data: null,
         createdAt,
         ...(typeof countNo === "number" ? { countNo } : {}),
       }
     );
 
-    if (responseType === "search" && data && typeof data === "object") {
-      const searchData: any = data;
+    if (responseType === "search" && dataObj && typeof dataObj === "object") {
+      const searchData = dataObj;
       const webItems = Array.isArray(searchData.webItems) ? searchData.webItems : [];
       const mediaItems = Array.isArray(searchData.mediaItems) ? searchData.mediaItems : [];
       const weatherItems = Array.isArray(searchData.weatherItems) ? searchData.weatherItems : [];
@@ -223,13 +229,29 @@ export const writeResponse = mutation({
         weatherItems,
         youtubeItems,
         shoppingItems,
-        mapLocation: searchData.mapLocation ?? undefined,
-        googleMapsKey: searchData.googleMapsKey ?? undefined,
+        mapLocation: typeof searchData.mapLocation === "string" ? searchData.mapLocation : undefined,
+        googleMapsKey: typeof searchData.googleMapsKey === "string" ? searchData.googleMapsKey : undefined,
         shouldShowTabs: Boolean(searchData.shouldShowTabs),
       });
     }
 
     return { chatId, responseId };
+  },
+});
+
+export const updateResponse = mutation({
+  args: {
+    responseId: v.id("responses"),
+    content: v.string(),
+    responseType: v.string(),
+    data: v.optional(v.any()),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.responseId, {
+      content: args.content,
+      responseType: args.responseType,
+      ...(args.data !== undefined ? { data: args.data } : {}),
+    });
   },
 });
 
@@ -278,34 +300,75 @@ export const addPromptEdit = mutation({
 });
 
 export const listChatMessages = query({
-  args: {
-    userId: v.string(),
-    sessionId: v.string(),
-  },
+  args: { userId: v.string(), sessionId: v.string() },
   handler: async (ctx, args) => {
     const { userId, sessionId } = args;
 
     const chat = await ctx.db
       .query("chats")
-      .filter((q) => q.eq(q.field("userId"), userId))
-      .filter((q) => q.eq(q.field("sessionId"), sessionId))
+      .withIndex("by_user_session", (q) =>
+        q.eq("userId", userId).eq("sessionId", sessionId)
+      )
       .first();
 
-    if (!chat) {
-      return { chat: null, prompts: [], responses: [] };
-    }
+    if (!chat) return { chat: null, prompts: [], responses: [] };
 
     const prompts = await ctx.db
       .query("user_prompts")
-      .filter((q) => q.eq(q.field("userId"), userId))
-      .filter((q) => q.eq(q.field("sessionId"), sessionId))
+      .withIndex("by_user_session", (q) =>
+        q.eq("userId", userId).eq("sessionId", sessionId)
+      )
       .collect();
 
-    const responses = await ctx.db
+    const rawResponses = await ctx.db
       .query("responses")
-      .filter((q) => q.eq(q.field("userId"), userId))
-      .filter((q) => q.eq(q.field("sessionId"), sessionId))
+      .withIndex("by_user_session", (q) =>
+        q.eq("userId", userId).eq("sessionId", sessionId)
+      )
       .collect();
+
+    const allSearchResults = await ctx.db
+      .query("search_results")
+      .withIndex("by_chat", (q) => q.eq("chatId", chat._id))
+      .collect();
+
+    const searchResultMap = new Map(
+      allSearchResults.map((sr) => [sr.responseId as string, sr])
+    );
+
+    const responses = rawResponses
+      .filter(
+        (r) =>
+          !(
+            r.responseType === "streaming" &&
+            (r.content ?? "").trim() === "" &&
+            !searchResultMap.has(r._id as string)
+          )
+      )
+      .map((response) => {
+        const searchResult = searchResultMap.get(response._id as string);
+
+        if (!searchResult) {
+          return response;
+        }
+
+        return {
+          ...response,
+          data: {
+            searchQuery: searchResult.searchQuery,
+            overallSummaryLines: searchResult.overallSummaryLines ?? [],
+            summary: searchResult.summary ?? "",
+            webItems: searchResult.webItems ?? [],
+            mediaItems: searchResult.mediaItems ?? [],
+            weatherItems: searchResult.weatherItems ?? [],
+            youtubeItems: searchResult.youtubeItems ?? [],
+            shoppingItems: searchResult.shoppingItems ?? [],
+            mapLocation: searchResult.mapLocation,
+            googleMapsKey: searchResult.googleMapsKey,
+            shouldShowTabs: searchResult.shouldShowTabs ?? false,
+          },
+        };
+      });
 
     prompts.sort((a, b) => a.createdAt - b.createdAt);
     responses.sort((a, b) => a.createdAt - b.createdAt);
@@ -379,5 +442,179 @@ export const updateChatTitle = mutation({
     }
     await ctx.db.patch(args.chatId, { title: args.title });
     return { ok: true };
+  },
+});
+
+export const patchSearchResultsSummary = mutation({
+  args: {
+    responseId: v.id("responses"),
+    overallSummaryLines: v.array(v.string()),
+    summary: v.optional(v.string()),
+    content: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const searchResult = await ctx.db
+      .query("search_results")
+      .withIndex("by_response", (q) => q.eq("responseId", args.responseId))
+      .first();
+
+    if (searchResult) {
+      await ctx.db.patch(searchResult._id, {
+        overallSummaryLines: args.overallSummaryLines,
+        summary: args.summary,
+      });
+    }
+
+    await ctx.db.patch(args.responseId, {
+      content: args.content,
+      responseType: "search",
+    });
+  },
+});
+
+export const writeInitialSearchResponse = mutation({
+  args: {
+    userId: v.string(),
+    sessionId: v.string(),
+    promptId: v.union(v.id("user_prompts"), v.null()),
+    reasoning: v.string(),
+    responseType: v.string(),
+    createdAt: v.number(),
+    countNo: v.optional(v.number()),
+    searchQuery: v.string(),
+    webItems: v.array(v.any()),
+    mediaItems: v.array(v.any()),
+    weatherItems: v.array(v.any()),
+    youtubeItems: v.optional(v.array(v.any())),
+    shoppingItems: v.optional(v.array(v.any())),
+    mapLocation: v.optional(v.string()),
+    googleMapsKey: v.optional(v.string()),
+    shouldShowTabs: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const chat = await ctx.db
+      .query("chats")
+      .withIndex("by_user_session", (q) =>
+        q.eq("userId", args.userId).eq("sessionId", args.sessionId)
+      )
+      .first();
+
+    if (!chat) throw new Error("Chat not found for writeInitialSearchResponse");
+
+    const responseId = await ctx.db.insert("responses", {
+      chatId: chat._id,
+      userId: args.userId,
+      sessionId: args.sessionId,
+      promptId: args.promptId,
+      responseType: "streaming",
+      reasoning: args.reasoning,
+      content: "",
+      data: null,
+      createdAt: args.createdAt,
+      ...(typeof args.countNo === "number" ? { countNo: args.countNo } : {}),
+    });
+
+    await ctx.db.insert("search_results", {
+      chatId: chat._id,
+      responseId,
+      searchQuery: args.searchQuery,
+      overallSummaryLines: [],
+      summary: undefined,
+      webItems: args.webItems,
+      mediaItems: args.mediaItems,
+      weatherItems: args.weatherItems,
+      youtubeItems: args.youtubeItems,
+      shoppingItems: args.shoppingItems,
+      mapLocation: args.mapLocation,
+      googleMapsKey: args.googleMapsKey,
+      shouldShowTabs: args.shouldShowTabs,
+    });
+
+    return { responseId };
+  },
+});
+
+export const migrateReasoningColumn = internalMutation({
+  handler: async (ctx) => {
+    const responses = await ctx.db.query("responses").collect();
+    let migrated = 0;
+
+    for (const response of responses) {
+      const data = response.data as any;
+
+      if (data?.reasoning && !response.reasoning) {
+        const { reasoning, ...restData } = data;
+
+        await ctx.db.patch(response._id, {
+          reasoning: String(reasoning),
+          data: Object.keys(restData).length > 0 ? restData : null,
+        });
+        migrated++;
+      }
+    }
+
+    console.log(`[migration] Moved reasoning for ${migrated} records`);
+  },
+});
+
+export const migrateSearchDataToSearchResults = internalMutation({
+  handler: async (ctx) => {
+    const responses = await ctx.db.query("responses").collect();
+    let migrated = 0;
+    let skipped = 0;
+
+    for (const response of responses) {
+      const data = response.data as any;
+
+      if (!data || (!data.webItems && !data.searchQuery && !data.shouldShowTabs)) {
+        continue;
+      }
+
+      const existing = await ctx.db
+        .query("search_results")
+        .withIndex("by_response", (q) => q.eq("responseId", response._id))
+        .first();
+
+      if (existing) {
+        if (
+          (!existing.overallSummaryLines || existing.overallSummaryLines.length === 0) &&
+          Array.isArray(data.overallSummaryLines) &&
+          data.overallSummaryLines.length > 0
+        ) {
+          await ctx.db.patch(existing._id, {
+            overallSummaryLines: data.overallSummaryLines,
+            summary: data.summary ?? undefined,
+          });
+        }
+        await ctx.db.patch(response._id, { data: null });
+        skipped++;
+        continue;
+      }
+
+      await ctx.db.insert("search_results", {
+        chatId: response.chatId,
+        responseId: response._id,
+        searchQuery: String(data.searchQuery ?? ""),
+        overallSummaryLines: Array.isArray(data.overallSummaryLines)
+          ? data.overallSummaryLines
+          : [],
+        summary: typeof data.summary === "string" ? data.summary : undefined,
+        webItems: Array.isArray(data.webItems) ? data.webItems : [],
+        mediaItems: Array.isArray(data.mediaItems) ? data.mediaItems : [],
+        weatherItems: Array.isArray(data.weatherItems) ? data.weatherItems : [],
+        youtubeItems: Array.isArray(data.youtubeItems) ? data.youtubeItems : undefined,
+        shoppingItems: Array.isArray(data.shoppingItems) ? data.shoppingItems : undefined,
+        mapLocation: data.mapLocation ?? undefined,
+        googleMapsKey: data.googleMapsKey ?? undefined,
+        shouldShowTabs: Boolean(data.shouldShowTabs),
+      });
+
+      await ctx.db.patch(response._id, { data: null });
+      migrated++;
+    }
+
+    console.log(
+      `[migration] Created search_results for ${migrated} records, patched ${skipped} existing`
+    );
   },
 });

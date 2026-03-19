@@ -30,6 +30,21 @@ export type GroqGenerateContentResult = {
 
 const MAX_RETRIES = 3;
 const INITIAL_RETRY_DELAY = 750;
+const REQUEST_TIMEOUT_MS = 15000;
+
+const _global = globalThis as unknown as { __groqInstance?: GroqClient };
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(
+        () => reject(new Error(`[GroqClient] Request timed out after ${ms}ms`)),
+        ms
+      )
+    ),
+  ]);
+}
 
 function safeJsonParse(s: string | Record<string, unknown>): Record<string, unknown> {
   if (typeof s === "object" && s !== null) {
@@ -74,7 +89,6 @@ function inferRetryDelayMs(err: unknown, fallbackMs: number) {
 }
 
 export class GroqClient {
-  private static instance: GroqClient;
   private apiKeys: string[];
   private rateLimitedUntilMs: number | null;
 
@@ -89,10 +103,10 @@ export class GroqClient {
   }
 
   public static getInstance(): GroqClient {
-    if (!GroqClient.instance) {
-      GroqClient.instance = new GroqClient();
+    if (!_global.__groqInstance) {
+      _global.__groqInstance = new GroqClient();
     }
-    return GroqClient.instance;
+    return _global.__groqInstance;
   }
 
   private getClient(apiKey: string) {
@@ -129,7 +143,8 @@ export class GroqClient {
 
       for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         try {
-          const completion = await client.chat.completions.create({
+          const completion = await withTimeout(
+            client.chat.completions.create({
             model,
             messages,
             tools: hasTools ? (options.tools as unknown as any) : undefined,
@@ -137,7 +152,9 @@ export class GroqClient {
             top_p: 1,
             max_tokens: 2048,
             stop: null,
-          });
+          }),
+          REQUEST_TIMEOUT_MS
+          );
 
           const functionCalls: ToolCall[] = [];
           const msg = completion.choices?.[0]?.message;
@@ -239,11 +256,8 @@ export class GroqClient {
 
           if (isDailyRateLimit) {
             retryable = false;
-            const waitMs = inferRetryDelayMs(
-              err,
-              5 * 60 * 1000
-            );
-            this.rateLimitedUntilMs = Date.now() + waitMs;
+            this.rateLimitedUntilMs = Date.now() + 24 * 60 * 60 * 1000;
+            break;
           }
 
           if (retryable && attempt < MAX_RETRIES) {
@@ -261,6 +275,21 @@ export class GroqClient {
     }
 
     throw lastError || new Error("[GroqClient] All API keys failed");
+  }
+
+  private async *streamWithTimeout(
+    streamPromise: Promise<AsyncIterable<any>>,
+    timeoutMs: number
+  ): AsyncGenerator<string, void, unknown> {
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`[GroqClient] Stream timed out after ${timeoutMs}ms`)), timeoutMs)
+    );
+    try {
+      const stream = await Promise.race([streamPromise, timeout]);
+      yield* stream as AsyncIterable<string>;
+    } catch (err) {
+      throw err;
+    }
   }
 
   public async *streamContent(
@@ -282,7 +311,8 @@ export class GroqClient {
       const client = this.getClient(key);
       for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         try {
-          const stream = await client.chat.completions.create({
+          const stream = await withTimeout(
+            client.chat.completions.create({
             model,
             messages,
             tools: (options.tools as unknown as any) ?? undefined,
@@ -292,7 +322,9 @@ export class GroqClient {
             max_tokens: 2048,
             stop: null,
             stream: true,
-          });
+          }),
+          REQUEST_TIMEOUT_MS
+          );
 
           for await (const chunk of stream as AsyncIterable<{
             choices?: Array<{ delta?: { content?: string | null } }>;

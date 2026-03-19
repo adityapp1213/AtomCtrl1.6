@@ -178,7 +178,7 @@ export type ResponseProps = HTMLAttributes<HTMLDivElement> & {
 const components: Options['components'] = {
   p: ({ node, children, className, ...props }) => (
     <p
-      className={cn('my-0.5 leading-[1.5] text-foreground/90', className)}
+      className={cn('my-0.5 leading-[1.5] text-foreground/90 font-serif', className)}
       {...(props as any)}
     >
       {children}
@@ -252,7 +252,7 @@ const components: Options['components'] = {
   h2: ({ node, children, className, ...props }) => (
     <h2
       className={cn(
-        'mt-3 mb-0.5 font-sans font-bold text-[22px] tracking-[-0.01em] text-foreground',
+        'mt-3 mb-0.5 font-serif font-bold text-[22px] tracking-[-0.01em] text-foreground',
         className
       )}
       {...(props as any)}
@@ -263,7 +263,7 @@ const components: Options['components'] = {
   h3: ({ node, children, className, ...props }) => (
     <h3
       className={cn(
-        'mt-2.5 mb-0.5 font-sans font-semibold text-[18px] tracking-[-0.01em] text-foreground',
+        'mt-2.5 mb-0.5 font-serif font-semibold text-[18px] tracking-[-0.01em] text-foreground',
         className
       )}
       {...(props as any)}
@@ -274,7 +274,7 @@ const components: Options['components'] = {
   h4: ({ node, children, className, ...props }) => (
     <h4
       className={cn(
-        'mt-2.5 mb-0.5 font-sans font-semibold text-base tracking-[-0.01em] text-foreground',
+        'mt-2.5 mb-0.5 font-serif font-semibold text-base tracking-[-0.01em] text-foreground',
         className
       )}
       {...(props as any)}
@@ -285,7 +285,7 @@ const components: Options['components'] = {
   h5: ({ node, children, className, ...props }) => (
     <h5
       className={cn(
-        'mt-2.5 mb-0.5 font-sans font-semibold text-sm text-foreground',
+        'mt-2.5 mb-0.5 font-serif font-semibold text-sm text-foreground',
         className
       )}
       {...(props as any)}
@@ -296,7 +296,7 @@ const components: Options['components'] = {
   h6: ({ node, children, className, ...props }) => (
     <h6
       className={cn(
-        'mt-2.5 mb-0.5 font-sans font-semibold text-sm text-foreground',
+        'mt-2.5 mb-0.5 font-serif font-semibold text-sm text-foreground',
         className
       )}
       {...(props as any)}
@@ -345,7 +345,7 @@ const components: Options['components'] = {
   blockquote: ({ node, children, className, ...props }) => (
     <blockquote
       className={cn(
-        'my-1.5 border-muted-foreground/30 border-l-4 pl-4 text-muted-foreground italic',
+        'my-1.5 border-muted-foreground/30 border-l-4 pl-4 text-muted-foreground font-serif',
         className
       )}
       {...(props as any)}
@@ -423,7 +423,7 @@ export const Response = memo(
     return (
       <div
         className={cn(
-          "size-full break-words whitespace-pre-line [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+          "size-full break-words whitespace-pre-line font-serif [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
           className
         )}
         {...(props as any)}

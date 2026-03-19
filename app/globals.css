@@ -173,6 +173,38 @@
   }
 }
 
+/* Prevent horizontal scrolling on mobile */
+html, body {
+  overflow-x: hidden;
+  max-width: 100vw;
+}
+
+/* Mobile-specific overflow handling */
+@media (max-width: 768px) {
+  html {
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+  }
+  
+  body {
+    overflow-x: hidden;
+    max-width: 100%;
+    position: relative;
+  }
+  
+  /* Prevent horizontal scroll on chat messages */
+  .max-w-\[95\%\] {
+    max-width: 100% !important;
+  }
+  
+  /* Ensure all content containers don't overflow */
+  [class*="flex"][class*="w-full"],
+  [class*="max-w"] {
+    max-width: 100% !important;
+    overflow-x: hidden;
+  }
+}
+
 @keyframes fade-scale {
   0% {
     opacity: 0;
@@ -182,4 +214,13 @@
     opacity: 1;
     transform: translateY(-50%) scale(1);
   }
+}
+
+/* Instrument Serif font classes */
+.font-serif {
+  font-family: var(--font-serif);
+}
+
+.font-serif-italic {
+  font-family: var(--font-serif);
 }

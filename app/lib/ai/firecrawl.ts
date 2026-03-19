@@ -1,6 +1,12 @@
 import { GroqClient } from "@/app/lib/ai/groq/groq-client";
-import { GeminiClient } from "@/app/lib/ai/gemini-client";
 import { DETECT_INTENT_SYSTEM_PROMPT } from "@/app/lib/ai/system-prompts";
+
+function withScrapeTimeout<T>(promise: Promise<T>, ms = 12000): Promise<T | null> {
+  return Promise.race([
+    promise,
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), ms)),
+  ]);
+}
 
 export type ScrapedUrlSummary = {
   url: string;
@@ -180,50 +186,66 @@ async function firecrawlScrapeMarkdown(
     let summary = "";
     let answer = "";
     
-    // Case 1: Standard markdown response
+    // Case 1: Standard markdown response (already formatted properly)
     if (typeof json.data.markdown === "string" && json.data.markdown.trim()) {
       markdown = json.data.markdown;
       summary = typeof json.data.summary === "string" ? json.data.summary : "";
     }
     
-    // Case 2: JSON response - check both data.json and data.content
+    // Case 2: JSON response - convert to clean markdown
     const jsonData = json.data.json || json.data.content;
     if (jsonData && typeof jsonData === "object") {
       const parts: string[] = [];
       
       // Extract title from metadata if available
       const title = json.data.metadata?.title || jsonData.title;
-      if (title) parts.push(`# ${title}`);
+      if (title) parts.push(`# ${title}\n`);
       
-      // Handle description
-      const description = jsonData.description || jsonData.summary;
-      if (description) parts.push(description);
+      // Handle description/intro
+      const description = jsonData.description || jsonData.summary || jsonData.intro;
+      if (description && typeof description === "string") parts.push(`${description}\n`);
       
-      // Handle keyPoints
+      // Handle keyPoints as bullet list
       if (jsonData.keyPoints && Array.isArray(jsonData.keyPoints)) {
-        parts.push("## Key Points");
-        jsonData.keyPoints.forEach((point: string) => parts.push(`- ${point}`));
+        parts.push("## Key Points\n");
+        jsonData.keyPoints.forEach((point: string) => {
+          if (point) parts.push(`- ${point}`);
+        });
+        parts.push("");
       }
       
-      // Handle other content
+      // Handle main content - preserve as plain text without bold formatting
       for (const [key, value] of Object.entries(jsonData)) {
-        if (["title", "description", "summary", "keyPoints", "relatedLinks"].includes(key)) continue;
-        if (typeof value === "string" && value.trim()) {
-          parts.push(`**${key}**: ${value}`);
-        } else if (Array.isArray(value) && value.length > 0) {
-          parts.push(`**${key}**: ${value.join(", ")}`);
+        if (["title", "description", "summary", "keyPoints", "relatedLinks", "intro", "image", "icon"].includes(key)) continue;
+        if (typeof value === "string" && value.trim() && value.length < 500) {
+          parts.push(value.trim());
+        } else if (Array.isArray(value) && value.length > 0 && value.length < 20) {
+          const listItems = value.filter(v => typeof v === "string" && v.trim()).map(v => `- ${v}`);
+          if (listItems.length > 0) {
+            parts.push(...listItems);
+          }
         }
       }
       
-      // Handle related links
+      // Handle related links as markdown links
       if (jsonData.relatedLinks && Array.isArray(jsonData.relatedLinks)) {
-        parts.push("## Related Links");
-        jsonData.relatedLinks.forEach((link: string) => parts.push(`- ${link}`));
+        parts.push("## Related Links\n");
+        jsonData.relatedLinks.forEach((link: any) => {
+          if (typeof link === "string") {
+            parts.push(`- ${link}`);
+          } else if (link && typeof link === "object" && link.url) {
+            const text = link.text || link.title || link.url;
+            parts.push(`- [${text}](${link.url})`);
+          }
+        });
       }
       
-      markdown = parts.join("\n\n") || markdown;
+      const formattedMarkdown = parts.filter(p => p && p.trim()).join("\n");
+      if (formattedMarkdown) {
+        markdown = formattedMarkdown;
+      }
       summary = description || summary;
-      answer = description || parts.join(" ");
+      answer = description || parts.filter(p => !p.startsWith("#") && !p.startsWith("-")).join(" ");
     }
     
     // Case 3: Raw content field
@@ -252,15 +274,12 @@ async function summarizeScrapedMarkdown(params: {
   title?: string;
   markdown: string;
   query: string;
-  providerOverride?: "gemini" | "groq";
 }): Promise<string> {
   const hasGroqKey = Boolean(process.env.GROQ_API_KEY || process.env.OPEN_AI_API_KEY);
-  const hasGeminiKey = Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY);
-  const provider = (params.providerOverride || process.env.AI_PROVIDER || (hasGroqKey ? "groq" : "gemini")).toLowerCase();
 
   const excerpt = truncateText(params.markdown.replace(/\s+/g, " ").trim(), 8000);
   if (!excerpt) {
-    return "I couldn’t extract enough readable content from this page.";
+    return "I couldn't extract enough readable content from this page.";
   }
 
   const prompt =
@@ -287,31 +306,22 @@ async function summarizeScrapedMarkdown(params: {
   };
 
   try {
-    const resp =
-      provider === "groq" && hasGroqKey
-        ? await GroqClient.getInstance().generateContent("openai/gpt-oss-20b", prompt, { systemInstruction })
-        : hasGeminiKey
-          ? await GeminiClient.getInstance().generateContent("gemini-2.5-flash", prompt)
-          : null;
+    if (!hasGroqKey) {
+      return "I couldn't extract enough readable content from this page.";
+    }
+    const resp = await GroqClient.getInstance().generateContent("openai/gpt-oss-20b", prompt, { systemInstruction });
     const text = (resp?.text || "").trim();
-    return text || "I couldn’t extract enough readable content from this page.";
+    return text || "I couldn't extract enough readable content from this page.";
   } catch {
-    return "I couldn’t extract enough readable content from this page.";
+    return "I couldn't extract enough readable content from this page.";
   }
 }
 
 async function answerFromScrapedPages(params: {
   pages: { url: string; title?: string; markdown: string }[];
   query: string;
-  providerOverride?: "gemini" | "groq";
 }): Promise<string> {
   const hasGroqKey = Boolean(process.env.GROQ_API_KEY || process.env.OPEN_AI_API_KEY);
-  const hasGeminiKey = Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY);
-  const provider = (
-    params.providerOverride ||
-    process.env.AI_PROVIDER ||
-    (hasGroqKey ? "groq" : "gemini")
-  ).toLowerCase();
 
   const packedPages = params.pages
     .map((p, idx) => {
@@ -348,14 +358,12 @@ async function answerFromScrapedPages(params: {
   };
 
   try {
-    const resp =
-      provider === "groq" && hasGroqKey
-        ? await GroqClient.getInstance().generateContent("openai/gpt-oss-20b", prompt, {
-            systemInstruction,
-          })
-        : hasGeminiKey
-          ? await GeminiClient.getInstance().generateContent("gemini-2.5-flash", prompt)
-          : null;
+    if (!hasGroqKey) {
+      return "";
+    }
+    const resp = await GroqClient.getInstance().generateContent("openai/gpt-oss-20b", prompt, {
+      systemInstruction,
+    });
     return (resp?.text || "").trim();
   } catch {
     return "";
@@ -366,7 +374,6 @@ export async function scrapeUrls(params: {
   urls: string[];
   query: string;
   mode: "summary" | "answer";
-  providerOverride?: "gemini" | "groq";
 }): Promise<ScrapeUrlsResult> {
   const baseUrls = Array.isArray(params.urls) ? params.urls : [];
 
@@ -384,15 +391,20 @@ export async function scrapeUrls(params: {
   const unique = Array.from(new Set(normalizedUrls)).slice(0, 2);
   if (!unique.length) return { items: [] };
 
-  const pages = await Promise.all(
+  const settled = await Promise.allSettled(
     unique.map(async (url) => {
-      const doc = await firecrawlScrapeMarkdown(url, params.mode, params.query);
+      const doc = await withScrapeTimeout(firecrawlScrapeMarkdown(url, params.mode, params.query), 12000);
       if (!doc) return null;
       return { url, title: doc.title, markdown: doc.markdown, summary: doc.summary, answer: doc.answer };
     })
   );
 
-  const validPages = pages.filter(Boolean) as {
+  const pages = settled
+    .filter((r): r is PromiseFulfilledResult<any> => r.status === "fulfilled")
+    .map((r) => r.value)
+    .filter(Boolean);
+
+  const validPages = pages as {
     url: string;
     title?: string;
     markdown: string;
@@ -412,7 +424,7 @@ export async function scrapeUrls(params: {
     }
 
     items = (
-      await Promise.all(
+      await Promise.allSettled(
         validPages.map(async (p) => {
           const summaryText = (p.summary || "").toString().trim();
           if (summaryText) {
@@ -423,12 +435,14 @@ export async function scrapeUrls(params: {
             title: p.title,
             markdown: p.markdown,
             query: params.query,
-            providerOverride: params.providerOverride,
           });
           return { url: p.url, title: p.title, summary: llmSummary } satisfies ScrapedUrlSummary;
         })
       )
-    ).filter(Boolean) as ScrapedUrlSummary[];
+    )
+      .filter((r): r is PromiseFulfilledResult<any> => r.status === "fulfilled")
+      .map((r) => r.value)
+      .filter(Boolean) as ScrapedUrlSummary[];
   } else if (unique.length > 0) {
     // If we had URLs to scrape but all failed, return an error message
     items = [{
@@ -442,7 +456,6 @@ export async function scrapeUrls(params: {
     const answer = validPages.length > 0 ? await answerFromScrapedPages({
       pages: validPages,
       query: params.query,
-      providerOverride: params.providerOverride,
     }) : "I was unable to scrape the requested URLs to provide a detailed answer.";
     return { items, answer: answer || undefined };
   }

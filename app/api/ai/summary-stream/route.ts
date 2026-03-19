@@ -1,6 +1,4 @@
-import { cookies } from "next/headers";
 import { GroqClient } from "@/app/lib/ai/groq/groq-client";
-import { GeminiClient } from "@/app/lib/ai/gemini-client";
 
 function buildSourcePayload(payload: any): string {
   const rawItems = Array.isArray(payload?.webItems) ? payload.webItems : [];
@@ -119,52 +117,18 @@ export async function POST(req: Request) {
   const prompt = buildPrompt(query, sourcePayload);
 
   const hasGroqKey = Boolean(process.env.GROQ_API_KEY || process.env.OPEN_AI_API_KEY);
-  const hasGeminiKey = Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY);
-  const jar = await cookies();
-  const aiProvider = jar.get("ai_provider")?.value === "gemini" ? "gemini" : "groq";
 
-  if (aiProvider === "groq" && hasGroqKey) {
-    const groqStream = GroqClient.getInstance().streamContent("openai/gpt-oss-20b", prompt);
-    return new Response(groqStream as unknown as ReadableStream<Uint8Array>, {
-      headers: {
-        "Content-Type": "text/plain; charset=utf-8",
-        "Cache-Control": "no-cache",
-        "X-Accel-Buffering": "no",
-        Connection: "keep-alive",
-      },
-    });
+  if (!hasGroqKey) {
+    return new Response("", { status: 200 });
   }
 
-  if (hasGeminiKey) {
-    const geminiStream = GeminiClient.getInstance().streamContent("gemini-2.5-flash", prompt);
-    
-    const encoder = new TextEncoder();
-    const readable = new ReadableStream({
-      async pull(controller) {
-        try {
-          for await (const chunk of geminiStream) {
-            if (chunk) {
-              controller.enqueue(encoder.encode(chunk));
-            }
-          }
-        } catch (err) {
-          console.error("[summary-stream] Gemini stream error:", err);
-        } finally {
-          controller.close();
-        }
-      },
-      cancel() {}
-    });
-
-    return new Response(readable, {
-      headers: {
-        "Content-Type": "text/plain; charset=utf-8",
-        "Cache-Control": "no-cache",
-        "X-Accel-Buffering": "no",
-        Connection: "keep-alive",
-      },
-    });
-  }
-
-  return new Response("", { status: 200 });
+  const groqStream = GroqClient.getInstance().streamContent("openai/gpt-oss-20b", prompt);
+  return new Response(groqStream as unknown as ReadableStream<Uint8Array>, {
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Cache-Control": "no-cache",
+      "X-Accel-Buffering": "no",
+      Connection: "keep-alive",
+    },
+  });
 }

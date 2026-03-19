@@ -1,7 +1,24 @@
-import { Type } from "@google/genai";
 import { DETECT_INTENT_SYSTEM_PROMPT } from "./system-prompts";
-import { GeminiClient } from "./gemini-client";
 import { GroqClient, GroqTool } from "./groq/groq-client";
+
+export async function generateSmallTalkReply(query: string): Promise<string> {
+  const client = GroqClient.getInstance();
+  const result = await client.generateContent(
+    "openai/gpt-oss-20b",
+    query,
+    {
+      systemInstruction: {
+        parts: [{
+          text:
+            "You are Cloudy, a helpful AI assistant. " +
+            "Respond naturally and warmly to greetings and small talk in 1-2 sentences. " +
+            "Never mention search tools, APIs, or your own capabilities.",
+        }],
+      },
+    }
+  );
+  return result?.text?.trim() ?? "Hey! How can I help you today?";
+}
 
 export type DetectResult = {
   shouldShowTabs: boolean;
@@ -52,7 +69,7 @@ function tryAnswerFromContext(query: string, context?: string[]): string | null 
   return null;
 }
 
-function looksLikeSmallTalk(query: string): boolean {
+export function looksLikeSmallTalk(query: string): boolean {
   const raw = (query ?? "").trim().toLowerCase();
   if (!raw) return false;
   if (raw.length > 80) return false;
@@ -148,8 +165,7 @@ function shouldAllowMapLocation(location: string, userQuery: string): boolean {
 
 export async function detectIntent(
   query: string,
-  context?: string[],
-  providerOverride?: "gemini" | "groq"
+  context?: string[]
 ): Promise<DetectResult> {
   const trimmed = (query ?? "").trim();
   // We no longer use tryAnswerFromContext to allow the LLM to naturally 
@@ -205,10 +221,8 @@ export async function detectIntent(
   }
 
   const hasGroqKey = Boolean(process.env.GROQ_API_KEY || process.env.OPEN_AI_API_KEY);
-  const hasGeminiKey = Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY);
-  const provider = (providerOverride || process.env.AI_PROVIDER || (hasGroqKey ? "groq" : "gemini")).toLowerCase();
 
-  if (!(hasGroqKey || hasGeminiKey)) {
+  if (!hasGroqKey) {
     console.warn("[ai:detectIntent] Missing AI keys; AI disabled");
     return {
       shouldShowTabs: false,
@@ -385,38 +399,15 @@ export async function detectIntent(
       },
     ];
 
-    const pre =
-      provider === "groq" && hasGroqKey
-        ? await GroqClient.getInstance().generateContent("openai/gpt-oss-20b", safeQuery, {
-            tools: toolDeclarations.map(
-              (d): GroqTool => ({
-                type: "function",
-                function: { name: d.name, description: d.description, parameters: d.parameters },
-              })
-            ),
-            systemInstruction,
-          })
-        : await GeminiClient.getInstance().generateContent("gemini-2.5-flash", safeQuery, {
-            tools: [
-              {
-                functionDeclarations: toolDeclarations.map((d) => ({
-                  name: d.name,
-                  description: d.description,
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: Object.fromEntries(
-                      Object.entries(d.parameters.properties).map(([k, v]) => [
-                        k,
-                        { type: Type.STRING, description: (v as { description?: string })?.description },
-                      ])
-                    ),
-                    required: d.parameters.required,
-                  },
-                })),
-              },
-            ],
-            systemInstruction,
-          });
+    const pre = await GroqClient.getInstance().generateContent("openai/gpt-oss-20b", safeQuery, {
+      tools: toolDeclarations.map(
+        (d): GroqTool => ({
+          type: "function",
+          function: { name: d.name, description: d.description, parameters: d.parameters },
+        })
+      ),
+      systemInstruction,
+    });
 
     if (pre && pre.functionCalls && pre.functionCalls.length > 0) {
       for (const fc of pre.functionCalls) {
@@ -506,19 +497,20 @@ export async function detectIntent(
             const base = String(args.base || "USD").toUpperCase();
             const symbol = String(args.symbol || "INR").toUpperCase();
             const r = await fetch(
-              `https://api.exchangerate.host/latest?base=${base}&symbols=${symbol}`,
+              `https://api.frankfurter.app/latest?from=${base}&to=${symbol}`,
               { next: { revalidate: 3600 } }
             );
-            if (!r.ok) throw new Error(`FX API returned ${r.status}`);
+            if (!r.ok) throw new Error(`FX API error: ${r.status}`);
             const j = await r.json();
             const rate = j?.rates?.[symbol];
-            overallSummaryLines = [
-              rate ? `${base}→${symbol}: ${rate}` : `Rate unavailable for ${base}/${symbol}`,
-              "",
-            ];
+            if (rate) {
+              overallSummaryLines = [`${base}→${symbol}: ${rate}`, ""];
+            } else {
+              overallSummaryLines = [`Could not retrieve exchange rate for ${base} to ${symbol}. Please try again.`, ""];
+            }
           } catch (err) {
             console.warn("[ai:detectIntent] FX service error", err);
-            overallSummaryLines = ["FX service error", ""];
+            overallSummaryLines = [`Could not retrieve exchange rate. Please try again.`, ""];
           }
         } else if (fc.name === "shopping_search") {
           const q = String(args.query ?? safeQuery).trim();

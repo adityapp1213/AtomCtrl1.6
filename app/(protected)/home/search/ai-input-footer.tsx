@@ -20,8 +20,6 @@ import {
 } from "@/components/ai-elements/message";
 import { AtomLogo } from "@/components/logo";
 import {
-  extractMemoryFromWindow,
-  type MemoryWindowTurn,
   type DynamicSearchResult,
 } from "@/app/actions/search";
 import {
@@ -99,7 +97,6 @@ type ChatMessage = {
   isVoice?: boolean;
   type?: "text" | "search";
   data?: DynamicSearchResult["data"];
-  mem0Ops?: import("@/app/lib/mem0").Mem0Operation[];
   askCloudy?: AskCloudyContext | null;
   inputsUsed?: string[];
   planReasoning?: string | null;
@@ -334,6 +331,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
     type: "search" | "text";
     text?: string;
     searchQuery?: string;
+    responseId?: string;
     webItems?: { link: string; title: string; summaryLines?: string[] }[];
     scrapedItems?: { url: string; title?: string; summary: string }[];
     youtubeItems?: { id: string; title: string; description: string; channelTitle: string }[];
@@ -688,6 +686,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                 responseId: savedResponseId,
                 createdAt: Date.now(),
               });
+              setPendingStream((prev) => prev ? { ...prev, responseId: savedResponseId } : null);
             }
           }
         } else {
@@ -749,6 +748,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
 
   const writePrompt = useMutation(api.chat.writePrompt);
   const writeResponse = useMutation(api.chat.writeResponse);
+  const patchSearchResultsSummary = useMutation(api.chat.patchSearchResultsSummary);
   const editPrompt = useMutation(api.chat.editPrompt);
   const addPromptEdit = useMutation(api.chat.addPromptEdit);
   const [storageError, setStorageError] = useState<string | null>(null);
@@ -1445,6 +1445,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
       const shop = Array.isArray(pendingStream.shoppingItems) ? pendingStream.shoppingItems : [];
       const weather = Array.isArray(pendingStream.weatherItems) ? pendingStream.weatherItems : [];
       const messageId = pendingStream.messageId;
+      let buffer = "";
       
       if (!q || (items.length === 0 && scraped.length === 0 && yt.length === 0 && shop.length === 0 && weather.length === 0)) {
         setPendingStream(null);
@@ -1470,7 +1471,6 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
         
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
-        let buffer = "";
         let pendingUpdate: string | null = null;
         let updateScheduled = false;
         
@@ -1523,9 +1523,19 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
             return prev;
           });
         }
-      } catch {
+      } catch (e) {
+        console.error("[summary-stream] error:", e);
       } finally {
         setPendingStream(null);
+        if (buffer && pendingStream?.type === "search" && pendingStream?.responseId) {
+          const overallSummaryLines = buffer.split('\n').filter((l: string) => l.trim());
+          void patchSearchResultsSummary({
+            responseId: pendingStream.responseId as Id<"responses">,
+            overallSummaryLines,
+            summary: buffer,
+            content: buffer,
+          }).catch((err: unknown) => console.error("[patchSearchResultsSummary] failed:", err));
+        }
       }
     };
 
@@ -2142,65 +2152,6 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
 
     let contextInputs: string[] = [];
     try {
-      const shouldBuildMemoryWindow = userId && activeSessionId && recentMessages.length > 0;
-
-      let memoryTurns: MemoryWindowTurn[] = [];
-      let nextWindowKey: string | null = null;
-
-      if (shouldBuildMemoryWindow) {
-        memoryTurns = recentMessages.map((m) => {
-          const base = {
-            role: m.role,
-            type: (m.type ?? "text") as "text" | "search",
-            text: (m.content || "").toString().slice(0, 500),
-          };
-          if (m.type === "search" && m.data) {
-            return {
-              ...base,
-              search: {
-                searchQuery: m.data.searchQuery,
-                overallSummary: m.data.overallSummaryLines?.slice(0, 3) ?? [],
-              },
-            };
-          }
-          return base;
-        });
-        nextWindowKey = JSON.stringify(
-          memoryTurns.map((t) => ({
-            role: t.role,
-            type: t.type,
-            text: t.text,
-            searchQuery: t.search?.searchQuery ?? "",
-          }))
-        );
-      }
-
-      if (
-        shouldBuildMemoryWindow &&
-        recentMessages.length === maxWindowMessages &&
-        nextWindowKey &&
-        nextWindowKey !== memoryWindowKey
-      ) {
-        void (async () => {
-          const result = await extractMemoryFromWindow({
-            windowKey: nextWindowKey as string,
-            turns: memoryTurns,
-            userId,
-            sessionId: activeSessionId as string,
-          });
-          if (result.windowKey) {
-            setMemoryWindowKey(result.windowKey);
-          }
-          const summary = result.conversationSummary ?? "";
-          if (summary) {
-            setConversationMemory((prev) => {
-              const next = [...prev, summary];
-              return Array.from(new Set(next)).slice(-20);
-            });
-          }
-        })();
-      }
-
       contextInputs = [];
       let baseContext: string[] = [];
       if (structuredContext) {

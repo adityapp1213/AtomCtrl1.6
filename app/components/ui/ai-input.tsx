@@ -218,30 +218,21 @@ export function AIInput({
         audioContextRef.current = ctx;
         const source = ctx.createMediaStreamSource(stream);
         audioSourceRef.current = source;
-        const processor = ctx.createScriptProcessor(2048, 1, 1);
-        audioProcessorRef.current = processor;
-        processor.onaudioprocess = (event) => {
-          const input = event.inputBuffer.getChannelData(0);
-          let sum = 0;
-          for (let i = 0; i < input.length; i++) {
-            const v = input[i];
-            sum += v * v;
-          }
-          const rms = Math.sqrt(sum / input.length);
-          const threshold = 0.01;
-          const now = performance.now();
-          if (rms < threshold) {
-            if (silenceStartRef.current == null) {
-              silenceStartRef.current = now;
-            } else if (now - silenceStartRef.current > 900) {
+        try {
+          await ctx.audioWorklet.addModule("/audio-processors/silence-detector.js");
+          const workletNode = new AudioWorkletNode(ctx, "silence-detector");
+
+          workletNode.port.onmessage = (event) => {
+            if (event.data?.type === "silence") {
               stopRecording();
             }
-          } else {
-            silenceStartRef.current = null;
-          }
-        };
-        source.connect(processor);
-        processor.connect(ctx.destination);
+          };
+
+          source.connect(workletNode);
+          workletNode.connect(ctx.destination);
+        } catch (workletErr) {
+          console.warn("[voice] AudioWorklet unavailable, falling back to timer-based stop", workletErr);
+        }
       }
       stopTimerRef.current = setTimeout(() => {
         stopRecording();

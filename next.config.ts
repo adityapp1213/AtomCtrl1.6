@@ -1,5 +1,8 @@
 import type { NextConfig } from "next";
 import path from "path";
+import { validateEnv } from "./app/lib/env-check";
+
+validateEnv();
 
 const nextConfig: NextConfig = {
   outputFileTracingRoot: path.join(__dirname),
