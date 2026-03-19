@@ -501,6 +501,19 @@ export const writeInitialSearchResponse = mutation({
 
     if (!chat) throw new Error("Chat not found for writeInitialSearchResponse");
 
+    // Increment chat count and get the response's countNo
+    const currentCount = (chat.count ?? 0) + 1;
+    await ctx.db.patch(chat._id, { count: currentCount, updatedAt: args.createdAt });
+
+    // Get countNo from prompt if available
+    let responseCountNo: number | undefined;
+    if (args.promptId) {
+      const prompt = await ctx.db.get(args.promptId);
+      if (prompt && typeof (prompt as any).countNo === "number") {
+        responseCountNo = (prompt as any).countNo as number;
+      }
+    }
+
     const responseId = await ctx.db.insert("responses", {
       chatId: chat._id,
       userId: args.userId,
@@ -511,7 +524,7 @@ export const writeInitialSearchResponse = mutation({
       content: "",
       data: null,
       createdAt: args.createdAt,
-      ...(typeof args.countNo === "number" ? { countNo: args.countNo } : {}),
+      ...(typeof responseCountNo === "number" ? { countNo: responseCountNo } : {}),
     });
 
     await ctx.db.insert("search_results", {

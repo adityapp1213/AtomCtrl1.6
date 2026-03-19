@@ -332,6 +332,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
     text?: string;
     searchQuery?: string;
     responseId?: string;
+    fallbackSummary?: string;
     webItems?: { link: string; title: string; summaryLines?: string[] }[];
     scrapedItems?: { url: string; title?: string; summary: string }[];
     youtubeItems?: { id: string; title: string; description: string; channelTitle: string }[];
@@ -603,7 +604,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
             promptId: basePromptId,
             responseType: "text" as const,
             content: finalAnswer,
-            data: { reasoning: plan.reasoning },
+            reasoning: plan.reasoning || undefined,
             createdAt: Date.now(),
           };
           const saved = await writeResponse(responseArgs).catch(async () => {
@@ -642,51 +643,62 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                 : m
             )
           );
-          const hasWeb = Array.isArray(searchResult.data.webItems) && searchResult.data.webItems.length > 0;
-          const hasScraped = Array.isArray((searchResult.data as any).scrapedItems) && (searchResult.data as any).scrapedItems.length > 0;
-          if (!String(searchResult.data.summary ?? "").trim() && (hasWeb || hasScraped)) {
-            setPendingStream({
-              messageId: responseMessageId,
-              type: "search",
-              searchQuery: nextPrompt,
-              webItems: searchResult.data.webItems,
-              scrapedItems: Array.isArray((searchResult.data as any).scrapedItems)
-                ? (searchResult.data as any).scrapedItems
-                : [],
-              youtubeItems: Array.isArray((searchResult.data as any).youtubeItems)
-                ? (searchResult.data as any).youtubeItems
-                : [],
-              shoppingItems: Array.isArray((searchResult.data as any).shoppingItems)
-                ? (searchResult.data as any).shoppingItems
-                : [],
-              weatherItems: Array.isArray((searchResult.data as any).weatherItems)
-                ? (searchResult.data as any).weatherItems
-                : [],
-            });
-          }
 
+          // CRITICAL: Call writeInitialSearchResponse BEFORE setPendingStream
+          // so that responseId exists when the effect runs
           if (userId && activeSessionId && basePromptId) {
-            const responseArgs = {
-              userId,
-              sessionId: activeSessionId,
-              promptId: basePromptId,
-              responseType: "search" as const,
-              content: searchResult.content ?? "",
-              data: { ...(searchResult.data as any), reasoning: plan.reasoning },
-              createdAt: Date.now(),
-            };
-            const saved = await writeResponse(responseArgs).catch(async () => {
-              return await writeResponse(responseArgs);
-            });
-            const savedResponseId = (saved as any)?.responseId;
-            if (savedResponseId) {
-              await addPromptEdit({
+            try {
+              const saved = await writeInitialSearchResponse({
+                userId,
+                sessionId: activeSessionId,
                 promptId: basePromptId,
-                content: nextPrompt,
-                responseId: savedResponseId,
+                reasoning: plan.reasoning || "",
+                responseType: "search",
                 createdAt: Date.now(),
+                searchQuery: searchResult.data?.searchQuery || nextPrompt,
+                webItems: searchResult.data?.webItems || [],
+                mediaItems: searchResult.data?.mediaItems || [],
+                weatherItems: searchResult.data?.weatherItems || [],
+                youtubeItems: searchResult.data?.youtubeItems,
+                shoppingItems: searchResult.data?.shoppingItems,
+                mapLocation: searchResult.data?.mapLocation,
+                googleMapsKey: searchResult.data?.googleMapsKey,
+                shouldShowTabs: searchResult.data?.shouldShowTabs ?? true,
               });
-              setPendingStream((prev) => prev ? { ...prev, responseId: savedResponseId } : null);
+              const savedResponseId = (saved as any)?.responseId;
+              console.log("[writeInitialSearchResponse] AskCloudy responseId received:", savedResponseId);
+              
+              // Now call setPendingStream WITH responseId
+              if (savedResponseId) {
+                await addPromptEdit({
+                  promptId: basePromptId,
+                  content: nextPrompt,
+                  responseId: savedResponseId,
+                  createdAt: Date.now(),
+                });
+                setPendingStream({
+                  messageId: responseMessageId,
+                  type: "search",
+                  searchQuery: nextPrompt,
+                  responseId: savedResponseId,
+                  fallbackSummary: searchResult.data?.summary || undefined,
+                  webItems: searchResult.data.webItems,
+                  scrapedItems: Array.isArray((searchResult.data as any).scrapedItems)
+                    ? (searchResult.data as any).scrapedItems
+                    : [],
+                  youtubeItems: Array.isArray((searchResult.data as any).youtubeItems)
+                    ? (searchResult.data as any).youtubeItems
+                    : [],
+                  shoppingItems: Array.isArray((searchResult.data as any).shoppingItems)
+                    ? (searchResult.data as any).shoppingItems
+                    : [],
+                  weatherItems: Array.isArray((searchResult.data as any).weatherItems)
+                    ? (searchResult.data as any).weatherItems
+                    : [],
+                });
+              }
+            } catch (err) {
+              console.error("[writeInitialSearchResponse] failed:", err);
             }
           }
         } else {
@@ -707,7 +719,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
               promptId: basePromptId,
               responseType: "text" as const,
               content: fallbackAnswer,
-              data: { reasoning: plan.reasoning },
+              reasoning: plan.reasoning || undefined,
               createdAt: Date.now(),
             };
             const saved = await writeResponse(responseArgs).catch(async () => {
@@ -748,6 +760,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
 
   const writePrompt = useMutation(api.chat.writePrompt);
   const writeResponse = useMutation(api.chat.writeResponse);
+  const writeInitialSearchResponse = useMutation(api.chat.writeInitialSearchResponse);
   const patchSearchResultsSummary = useMutation(api.chat.patchSearchResultsSummary);
   const editPrompt = useMutation(api.chat.editPrompt);
   const addPromptEdit = useMutation(api.chat.addPromptEdit);
@@ -1416,41 +1429,80 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
     const controller = new AbortController();
     messageStreamAbortRef.current = controller;
 
-    const run = async () => {
-      if (pendingStream.type === "text") {
-        const text = String(pendingStream.text ?? "");
-        const messageId = pendingStream.messageId;
+    const messageId = pendingStream.messageId;
+    const responseId = pendingStream.responseId;
 
-        setMessages((prev) => {
-          for (let i = 0; i < prev.length; i++) {
-            if (prev[i].id === messageId) {
-              prev[i] = { ...prev[i], content: text };
-              return [...prev];
-            }
+    console.log("[stream] effect started", {
+      type: pendingStream.type,
+      hasResponseId: !!responseId,
+      responseId: responseId || null,
+    });
+
+    if (pendingStream.type === "text") {
+      const text = String(pendingStream.text ?? "");
+
+      setMessages((prev) => {
+        for (let i = 0; i < prev.length; i++) {
+          if (prev[i].id === messageId) {
+            prev[i] = { ...prev[i], content: text };
+            return [...prev];
           }
-          return prev;
-        });
+        }
+        return prev;
+      });
 
-        setPendingStream(null);
-        setCurrentPlanMeta((prev) =>
-          prev ? { ...prev, completedCount: prev.steps.length } : prev
-        );
-        return;
-      }
+      setPendingStream(null);
+      setCurrentPlanMeta((prev) =>
+        prev ? { ...prev, completedCount: prev.steps.length } : prev
+      );
+      return;
+    }
 
-      const q = String(pendingStream.searchQuery ?? "").trim();
-      const items = Array.isArray(pendingStream.webItems) ? pendingStream.webItems : [];
-      const scraped = Array.isArray(pendingStream.scrapedItems) ? pendingStream.scrapedItems : [];
-      const yt = Array.isArray(pendingStream.youtubeItems) ? pendingStream.youtubeItems : [];
-      const shop = Array.isArray(pendingStream.shoppingItems) ? pendingStream.shoppingItems : [];
-      const weather = Array.isArray(pendingStream.weatherItems) ? pendingStream.weatherItems : [];
-      const messageId = pendingStream.messageId;
-      let buffer = "";
+    const q = String(pendingStream.searchQuery ?? "").trim();
+    const items = Array.isArray(pendingStream.webItems) ? pendingStream.webItems : [];
+    const scraped = Array.isArray(pendingStream.scrapedItems) ? pendingStream.scrapedItems : [];
+    const yt = Array.isArray(pendingStream.youtubeItems) ? pendingStream.youtubeItems : [];
+    const shop = Array.isArray(pendingStream.shoppingItems) ? pendingStream.shoppingItems : [];
+    const weather = Array.isArray(pendingStream.weatherItems) ? pendingStream.weatherItems : [];
+    
+    // Always proceed with streaming if there's a search query - even if arrays are empty
+    // The stream will return empty response, and we'll patch with empty content
+    if (!q) {
+      setPendingStream(null);
+      return;
+    }
+    
+    let pendingUpdate: string | null = null;
+    let updateScheduled = false;
+    
+    const scheduleUpdate = () => {
+      if (updateScheduled || !pendingUpdate) return;
+      updateScheduled = true;
+      requestAnimationFrame(() => {
+        if (streamTaskRef.current !== taskId) return;
+        updateScheduled = false;
+        const text = pendingUpdate || "";
+        pendingUpdate = null;
+        if (text) {
+          setMessages((prev) => {
+            for (let i = 0; i < prev.length; i++) {
+              const m = prev[i];
+              if (m.id === messageId && m.type === "search" && m.data) {
+                if (m.data.summary !== text) {
+                  prev[i] = { ...m, data: { ...m.data, summary: text } };
+                  return [...prev];
+                }
+              }
+            }
+            return prev;
+          });
+        }
+      });
+    };
+
+    const run = async () => {
+      let accumulatedText = "";
       
-      if (!q || (items.length === 0 && scraped.length === 0 && yt.length === 0 && shop.length === 0 && weather.length === 0)) {
-        setPendingStream(null);
-        return;
-      }
       try {
         const resp = await fetch("/api/ai/summary-stream", {
           method: "POST",
@@ -1471,33 +1523,6 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
         
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
-        let pendingUpdate: string | null = null;
-        let updateScheduled = false;
-        
-        const scheduleUpdate = () => {
-          if (updateScheduled || !pendingUpdate) return;
-          updateScheduled = true;
-          requestAnimationFrame(() => {
-            if (streamTaskRef.current !== taskId) return;
-            updateScheduled = false;
-            const text = pendingUpdate || "";
-            pendingUpdate = null;
-            if (text) {
-              setMessages((prev) => {
-                for (let i = 0; i < prev.length; i++) {
-                  const m = prev[i];
-                  if (m.id === messageId && m.type === "search" && m.data) {
-                    if (m.data.summary !== text) {
-                      prev[i] = { ...m, data: { ...m.data, summary: text } };
-                      return [...prev];
-                    }
-                  }
-                }
-                return prev;
-              });
-            }
-          });
-        };
 
         while (true) {
           const { value, done } = await reader.read();
@@ -1506,42 +1531,77 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
           
           const chunk = decoder.decode(value, { stream: true });
           if (!chunk) continue;
-          buffer += chunk;
-          pendingUpdate = buffer;
+          accumulatedText += chunk;
+          pendingUpdate = accumulatedText;
           scheduleUpdate();
         }
         
-        if (buffer) {
+        if (accumulatedText) {
           setMessages((prev) => {
             for (let i = 0; i < prev.length; i++) {
               const m = prev[i];
               if (m.id === messageId && m.type === "search" && m.data) {
-                prev[i] = { ...m, data: { ...m.data, summary: buffer } };
+                prev[i] = { ...m, data: { ...m.data, summary: accumulatedText } };
                 return [...prev];
               }
             }
             return prev;
           });
         }
+        
+        console.log("[stream] completed normally", {
+          bufferLength: accumulatedText.length,
+          hasResponseId: !!responseId,
+        });
       } catch (e) {
         console.error("[summary-stream] error:", e);
       } finally {
         setPendingStream(null);
-        if (buffer && pendingStream?.type === "search" && pendingStream?.responseId) {
-          const overallSummaryLines = buffer.split('\n').filter((l: string) => l.trim());
-          void patchSearchResultsSummary({
-            responseId: pendingStream.responseId as Id<"responses">,
-            overallSummaryLines,
-            summary: buffer,
-            content: buffer,
-          }).catch((err: unknown) => console.error("[patchSearchResultsSummary] failed:", err));
+        
+        // ─────────────────────────────────────────────────────────────────
+        // PATCH — fires here AFTER stream loop completes (done: true or error)
+        // accumulatedText is guaranteed to be the complete stream content here
+        // Use fallbackSummary from pendingStream if stream returned empty
+        // ─────────────────────────────────────────────────────────────────
+        const streamContent = accumulatedText.trim();
+        const fallbackSummary = pendingStream.fallbackSummary;
+        const finalContent = streamContent || fallbackSummary || "";
+        
+        console.log("[patch] About to patch", {
+          responseId,
+          contentLength: finalContent.length,
+          contentPreview: finalContent.substring(0, 100),
+          hadStreamContent: !!streamContent,
+          hadFallback: !!fallbackSummary,
+        });
+
+        // ALWAYS patch if we have a responseId — even if content is empty
+        // The patch updates responseType from "streaming" to "search"
+        if (!responseId) {
+          console.error("[patch] MISSING responseId — skipped");
+        } else {
+          try {
+            const overallSummaryLines = finalContent.split('\n').filter((l: string) => l.trim());
+            await patchSearchResultsSummary({
+              responseId: responseId as Id<"responses">,
+              overallSummaryLines,
+              summary: finalContent || undefined,
+              content: finalContent,
+            });
+            console.log("[patch] patchSearchResultsSummary succeeded");
+          } catch (patchErr) {
+            console.error("[patch] patchSearchResultsSummary FAILED:", patchErr);
+          }
         }
       }
     };
 
     void run();
 
-    return () => controller.abort();
+    // Cleanup — ONLY aborts the controller, patch happens in run()'s finally
+    return () => {
+      controller.abort();
+    };
   }, [pendingStream, pendingMediaLoad.messageId]);
 
 
@@ -2220,7 +2280,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
             promptId: promptId ?? undefined,
             responseType: "text" as const,
             content: finalAnswer,
-            data: { reasoning: plan.reasoning },
+            reasoning: plan.reasoning || undefined,
             createdAt: Date.now(),
           };
 
@@ -2263,51 +2323,57 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                 : m
             )
           );
-          const hasWeb = Array.isArray(searchResult.data.webItems) && searchResult.data.webItems.length > 0;
-          const hasScraped = Array.isArray((searchResult.data as any).scrapedItems) && (searchResult.data as any).scrapedItems.length > 0;
-          if (!String(searchResult.data.summary ?? "").trim() && (hasWeb || hasScraped)) {
-            setPendingStream({
-              messageId: responseId,
-              type: "search",
-              searchQuery: effectiveQuery,
-              webItems: searchResult.data.webItems,
-              scrapedItems: Array.isArray((searchResult.data as any).scrapedItems)
-                ? (searchResult.data as any).scrapedItems
-                : [],
-              youtubeItems: Array.isArray((searchResult.data as any).youtubeItems)
-                ? (searchResult.data as any).youtubeItems
-                : [],
-              shoppingItems: Array.isArray((searchResult.data as any).shoppingItems)
-                ? (searchResult.data as any).shoppingItems
-                : [],
-              weatherItems: Array.isArray((searchResult.data as any).weatherItems)
-                ? (searchResult.data as any).weatherItems
-                : [],
-            });
-          }
 
+          // CRITICAL: Call writeInitialSearchResponse BEFORE setPendingStream
+          // so that responseId exists when the effect runs
           if (userId && activeSessionId) {
-            const responseArgs = {
-              userId,
-              sessionId: activeSessionId,
-              promptId: promptId ?? undefined,
-              responseType: "search" as const,
-              content: searchResult.content ?? "",
-              data: { ...(searchResult.data as any), reasoning: plan.reasoning },
-              createdAt: Date.now(),
-            };
-
             try {
-              await writeResponse(responseArgs);
-            } catch {
-              try {
-                await writeResponse(responseArgs);
-              } catch (err) {
-                console.error("Failed to save response", err);
-                setStorageError(
-                  "Some messages could not be saved. Check your connection."
-                );
+              const saved = await writeInitialSearchResponse({
+                userId,
+                sessionId: activeSessionId,
+                promptId: promptId ?? null,
+                reasoning: plan.reasoning || "",
+                responseType: "search",
+                createdAt: Date.now(),
+                searchQuery: searchResult.data?.searchQuery || effectiveQuery,
+                webItems: searchResult.data?.webItems || [],
+                mediaItems: searchResult.data?.mediaItems || [],
+                weatherItems: searchResult.data?.weatherItems || [],
+                youtubeItems: searchResult.data?.youtubeItems,
+                shoppingItems: searchResult.data?.shoppingItems,
+                mapLocation: searchResult.data?.mapLocation,
+                googleMapsKey: searchResult.data?.googleMapsKey,
+                shouldShowTabs: searchResult.data?.shouldShowTabs ?? true,
+              });
+              const savedResponseId = (saved as any)?.responseId;
+              console.log("[writeInitialSearchResponse] responseId received:", savedResponseId);
+              
+              // Now call setPendingStream WITH responseId
+              if (savedResponseId) {
+                setPendingStream({
+                  messageId: responseId,
+                  type: "search",
+                  searchQuery: effectiveQuery,
+                  responseId: savedResponseId,
+                  fallbackSummary: searchResult.data?.summary || undefined,
+                  webItems: searchResult.data.webItems,
+                  scrapedItems: Array.isArray((searchResult.data as any).scrapedItems)
+                    ? (searchResult.data as any).scrapedItems
+                    : [],
+                  youtubeItems: Array.isArray((searchResult.data as any).youtubeItems)
+                    ? (searchResult.data as any).youtubeItems
+                    : [],
+                  shoppingItems: Array.isArray((searchResult.data as any).shoppingItems)
+                    ? (searchResult.data as any).shoppingItems
+                    : [],
+                  weatherItems: Array.isArray((searchResult.data as any).weatherItems)
+                    ? (searchResult.data as any).weatherItems
+                    : [],
+                });
               }
+            } catch (err) {
+              console.error("[writeInitialSearchResponse] failed:", err);
+              setStorageError("Some messages could not be saved. Check your connection.");
             }
           }
         } else {
@@ -2329,7 +2395,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
               promptId: promptId ?? undefined,
               responseType: "text" as const,
               content: fallbackAnswer,
-              data: { reasoning: plan.reasoning },
+              reasoning: plan.reasoning || undefined,
               createdAt: Date.now(),
             };
 
