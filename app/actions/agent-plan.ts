@@ -347,46 +347,41 @@ export async function planQuerySteps(
     context: minimalContext,
   };
 
-  let result: Awaited<ReturnType<typeof client.generateContent>>;
+  let result: Awaited<ReturnType<typeof client.generateContent>> | null = null;
+  let caughtError: Error | null = null;
+  let isRecoverableError = false;
+  
   try {
     result = await client.generateContent(
       "openai/gpt-oss-20b",
       JSON.stringify(payload),
       {
         tools: PLANNER_TOOLS,
+        tool_choice: { type: "function", function: { name: "plan" } },
         systemInstruction: {
           parts: [{ text: PLANNER_SYSTEM_PROMPT }],
         },
       }
     );
   } catch (err) {
-    const errorMsg = String((err as Error)?.message || err);
+    caughtError = err as Error;
+    const errorMsg = String(caughtError.message || err);
     const isToolParseError = (err as any)?.isToolParseError;
     const isJsonError = errorMsg.includes("Failed to parse tool call arguments") ||
                         errorMsg.includes("invalid JSON");
+    const isOutputParseError = errorMsg.includes("output_parse_failed") ||
+                               errorMsg.includes("Parsing failed");
     
-    // If JSON parsing fails, fall back to simple web search
-    if (isToolParseError || isJsonError) {
-      console.warn("[planQuerySteps] Tool/JSON error, using fast search fallback:", errorMsg.slice(0, 100));
-      return {
-        mode: "plan" as PlanMode,
-        reasoning: "Using fallback search due to parsing issues.",
-        steps: [
-          {
-            id: "s1",
-            description: `Search: ${stripCodeForSearchTopic(trimmed)}`,
-            tool: "web_search",
-            canRunInParallel: false,
-            query: stripCodeForSearchTopic(trimmed),
-          },
-        ],
-      };
+    if (isToolParseError || isJsonError || isOutputParseError) {
+      console.warn("[planQuerySteps] Tool/JSON/output parse error:", errorMsg.slice(0, 100));
+      isRecoverableError = true;
+    } else {
+      throw caughtError;
     }
-    throw err;
   }
 
-  // Handle tool call response
-  if (result.functionCalls && result.functionCalls.length > 0) {
+  // Handle tool call response if result was successful
+  if (result && result.functionCalls && result.functionCalls.length > 0) {
     const fc = result.functionCalls[0];
     if (fc.name === "plan" && fc.args) {
       const args = fc.args as { mode?: string; reasoning?: string; steps?: PlannedStep[] };
@@ -394,7 +389,6 @@ export async function planQuerySteps(
       const mode: PlanMode = (args.mode as "answer" | "plan") || "plan";
       const reasoning = args.reasoning || "";
 
-      // Apply tool augmentation
       if (!steps.length) {
         steps.push({
           id: "s1",
@@ -420,19 +414,13 @@ export async function planQuerySteps(
         step.description = next.length > 280 ? next.slice(0, 280) : next;
       }
 
-      // If all steps have null/missing queries and are answer-only, fall back to direct answer
       const nonAnswerSteps = steps.filter(s => s.tool !== "answer");
       if (nonAnswerSteps.length === 0 || nonAnswerSteps.every(s => !s.query)) {
         return { mode: "answer", reasoning: "No valid search steps from planner, answering directly.", steps: [] };
       }
 
-      if (
-        mode === "plan" &&
-        steps.some((s) => s.tool === "web_search") &&
-        !steps.some((s) => s.tool === "image_search")
-      ) {
-        const insertAt = Math.max(0, steps.findIndex((s) => s.tool === "web_search") + 1);
-        steps.splice(insertAt, 0, {
+      if (mode === "plan" && steps.some((s) => s.tool === "web_search") && !steps.some((s) => s.tool === "image_search")) {
+        steps.splice(steps.findIndex((s) => s.tool === "web_search") + 1, 0, {
           id: `s${steps.length + 1}`,
           description: "Search images to provide an illustrative carousel.",
           tool: "image_search",
@@ -440,14 +428,9 @@ export async function planQuerySteps(
         });
       }
 
-      if (
-        mode === "plan" &&
-        steps.some((s) => s.tool === "web_search") &&
-        !steps.some((s) => s.tool === "scrape_urls") &&
-        /\b(read|scrape|deep dive|full page|from the page|from the site|from the link|jobs?|career|careers|hiring|apply|openings?|roles?|positions?|people|person|team|staff|contact|email|linkedin)\b/i.test(trimmed)
-      ) {
-        const insertAt = Math.max(0, steps.findIndex((s) => s.tool === "web_search") + 1);
-        steps.splice(insertAt, 0, {
+      if (mode === "plan" && steps.some((s) => s.tool === "web_search") && !steps.some((s) => s.tool === "scrape_urls") &&
+          /\b(read|scrape|deep dive|full page|from the page|from the site|from the link|jobs?|career|careers|hiring|apply|openings?|roles?|positions?|people|person|team|staff|contact|email|linkedin)\b/i.test(trimmed)) {
+        steps.splice(steps.findIndex((s) => s.tool === "web_search") + 1, 0, {
           id: `s${steps.length + 1}`,
           description: "Scrape the top links for deeper page-level detail.",
           tool: "scrape_urls",
@@ -460,122 +443,57 @@ export async function planQuerySteps(
   }
 
   const text = (result?.text || "").trim();
+  let plan: PlanResult | null = null;
   let json: any;
   try {
     const start = text.indexOf("{");
     const end = text.lastIndexOf("}");
     json = JSON.parse(text.slice(start, end + 1));
   } catch {
-    return {
-      mode: "answer",
-      reasoning: "Planning failed; defaulting to a direct answer plan.",
-      steps: [
-        {
-          id: "s1",
-          description: "Answer directly from existing knowledge.",
-          tool: "answer",
-          canRunInParallel: false,
-        },
-      ],
-    };
+    json = null;
   }
 
-  const reasoning =
-    typeof json.reasoning === "string" ? json.reasoning.trim() : "";
-  const rawMode = typeof json.mode === "string" ? json.mode.trim() : "";
-  const mode: PlanMode =
-    rawMode === "plan" || rawMode === "PLAN" ? "plan" : "answer";
-  const rawSteps = Array.isArray(json.steps) ? json.steps : [];
-  const steps: PlannedStep[] = rawSteps
-    .map((s: any, index: number): PlannedStep | null => {
-      const tool = String(s.tool || "answer").toLowerCase() as PlannedTool;
-      const validTools: PlannedTool[] = [
-        "answer",
-        "web_search",
-        "image_search",
-        "youtube_search",
-        "shopping_search",
-        "weather_city",
-        "scrape_urls",
-      ];
-      if (!validTools.includes(tool)) return null;
-      const query =
-        typeof s.query === "string"
-          ? s.query.trim()
-          : typeof s.searchQuery === "string"
-            ? s.searchQuery.trim()
-            : "";
-      return {
-        id: String(s.id || `s${index + 1}`),
-        description: String(s.description || "").slice(0, 280),
-        tool,
-        canRunInParallel: tool === "scrape_urls" ? false : Boolean(s.canRunInParallel),
-        query: query ? query.slice(0, 180) : undefined,
-      };
-    })
-    .filter(Boolean) as PlannedStep[];
+  if (json) {
+    const reasoning = typeof json.reasoning === "string" ? json.reasoning.trim() : "";
+    const rawMode = typeof json.mode === "string" ? json.mode.trim() : "";
+    const mode: PlanMode = rawMode === "plan" || rawMode === "PLAN" ? "plan" : "answer";
+    const rawSteps = Array.isArray(json.steps) ? json.steps : [];
+    const steps: PlannedStep[] = rawSteps
+      .map((s: any, index: number): PlannedStep | null => {
+        const tool = String(s.tool || "answer").toLowerCase() as PlannedTool;
+        const validTools: PlannedTool[] = ["answer", "web_search", "image_search", "youtube_search", "shopping_search", "weather_city", "scrape_urls"];
+        if (!validTools.includes(tool)) return null;
+        const query = typeof s.query === "string" ? s.query.trim() : typeof s.searchQuery === "string" ? s.searchQuery.trim() : "";
+        return { id: String(s.id || `s${index + 1}`), description: String(s.description || "").slice(0, 280), tool, canRunInParallel: tool === "scrape_urls" ? false : Boolean(s.canRunInParallel), query: query ? query.slice(0, 180) : undefined };
+      })
+      .filter(Boolean) as PlannedStep[];
 
-  if (!steps.length) {
-    steps.push({
-      id: "s1",
-      description: "Answer directly from existing knowledge.",
-      tool: "answer",
-      canRunInParallel: false,
-    });
+    if (steps.length) plan = { mode, reasoning, steps };
   }
 
-  const fallbackToolQuery = stripCodeForSearchTopic(trimmed);
-  for (const step of steps) {
-    if (step.tool === "answer") continue;
-    if (!step.query && fallbackToolQuery) {
-      step.query = fallbackToolQuery.slice(0, 180);
+  // Intent-aware text fallback
+  if (!plan && text) {
+    const textLower = text.toLowerCase();
+    const searchQuery = stripCodeForSearchTopic(trimmed);
+
+    if (/\b(order|buy|shop|purchase|price|deals|get me|find me)\b/i.test(textLower)) {
+      console.warn("[planQuerySteps] Text fallback: shopping intent detected");
+      plan = { mode: "plan", reasoning: "Shopping intent detected from text response fallback", steps: [{ id: "s1", tool: "shopping_search", description: `Search for product: ${searchQuery}`, query: searchQuery, canRunInParallel: false }, { id: "s2", tool: "web_search", description: `Web search for context: ${searchQuery}`, query: searchQuery, canRunInParallel: true }] };
+    } else if (/\b(trip|travel|visit|itinerary|places|tour|vlog)\b/i.test(textLower)) {
+      console.warn("[planQuerySteps] Text fallback: travel intent detected");
+      plan = { mode: "plan", reasoning: "Travel intent detected from text response fallback", steps: [{ id: "s1", tool: "web_search", description: `Travel guide: ${searchQuery}`, query: `${searchQuery} travel guide`, canRunInParallel: true }, { id: "s2", tool: "youtube_search", description: `Travel vlog: ${searchQuery}`, query: `${searchQuery} travel vlog`, canRunInParallel: true }] };
+    } else if (/\b(video|tutorial|youtube|watch|show me|how-to)\b/i.test(textLower)) {
+      console.warn("[planQuerySteps] Text fallback: video intent detected");
+      plan = { mode: "plan", reasoning: "Video intent detected from text response fallback", steps: [{ id: "s1", tool: "youtube_search", description: `Video search: ${searchQuery}`, query: searchQuery, canRunInParallel: true }, { id: "s2", tool: "web_search", description: `Supporting search: ${searchQuery}`, query: searchQuery, canRunInParallel: true }] };
+    } else {
+      console.warn("[planQuerySteps] Text fallback: default web_search");
+      plan = { mode: "plan", reasoning: "Default fallback: web search", steps: [{ id: "s1", tool: "web_search", description: `Search for: ${searchQuery}`, query: searchQuery, canRunInParallel: false }] };
     }
   }
 
-  for (const step of steps) {
-    if (step.tool === "answer") continue;
-    if (!step.query) continue;
-    if (step.description.includes("§")) continue;
-    const next = `${step.description} § ${step.query}`.trim();
-    step.description = next.length > 280 ? next.slice(0, 280) : next;
-  }
+  if (plan) return plan;
 
-  if (
-    mode === "plan" &&
-    steps.some((s) => s.tool === "web_search") &&
-    !steps.some((s) => s.tool === "image_search")
-  ) {
-    const insertAt = Math.max(
-      0,
-      steps.findIndex((s) => s.tool === "web_search") + 1
-    );
-    steps.splice(insertAt, 0, {
-      id: `s${steps.length + 1}`,
-      description: "Search images to provide an illustrative carousel.",
-      tool: "image_search",
-      canRunInParallel: true,
-    });
-  }
-
-  if (
-    mode === "plan" &&
-    steps.some((s) => s.tool === "web_search") &&
-    !steps.some((s) => s.tool === "scrape_urls") &&
-    /\b(read|scrape|deep dive|full page|from the page|from the site|from the link|jobs?|career|careers|hiring|apply|openings?|roles?|positions?|people|person|team|staff|contact|email|linkedin)\b/i.test(trimmed)
-  ) {
-    const insertAt = Math.max(
-      0,
-      steps.findIndex((s) => s.tool === "web_search") + 1
-    );
-    steps.splice(insertAt, 0, {
-      id: `s${steps.length + 1}`,
-      description: "Scrape the top links for deeper page-level detail.",
-      tool: "scrape_urls",
-      canRunInParallel: false,
-    });
-  }
-
-  return { mode, reasoning, steps };
+  return { mode: "answer", reasoning: "Planning failed; defaulting to a direct answer plan.", steps: [{ id: "s1", description: "Answer directly from existing knowledge.", tool: "answer", canRunInParallel: false }] };
 }
 
 const ANSWER_SYSTEM_PROMPT = 

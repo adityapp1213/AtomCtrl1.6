@@ -21,6 +21,10 @@ export type GroqTool = {
 export type GroqGenerateContentOptions = {
   tools?: GroqTool[];
   systemInstruction?: SystemInstruction;
+  tool_choice?: {
+    type: "function";
+    function: { name: string };
+  };
 };
 
 export type GroqGenerateContentResult = {
@@ -148,6 +152,7 @@ export class GroqClient {
             model,
             messages,
             tools: hasTools ? (options.tools as unknown as any) : undefined,
+            tool_choice: options.tool_choice ? (options.tool_choice as unknown as any) : undefined,
             temperature: 0.5,
             top_p: 1,
             max_tokens: 2048,
