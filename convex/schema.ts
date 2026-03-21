@@ -75,8 +75,6 @@ export default defineSchema({
     weatherItems: v.array(v.any()),
     youtubeItems: v.optional(v.array(v.any())),
     shoppingItems: v.optional(v.array(v.any())),
-    mapLocation: v.optional(v.string()),
-    googleMapsKey: v.optional(v.string()),
     shouldShowTabs: v.boolean(),
   })
     .index("by_chat", ["chatId"])

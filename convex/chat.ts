@@ -229,8 +229,6 @@ export const writeResponse = mutation({
         weatherItems,
         youtubeItems,
         shoppingItems,
-        mapLocation: typeof searchData.mapLocation === "string" ? searchData.mapLocation : undefined,
-        googleMapsKey: typeof searchData.googleMapsKey === "string" ? searchData.googleMapsKey : undefined,
         shouldShowTabs: Boolean(searchData.shouldShowTabs),
       });
     }
@@ -363,8 +361,6 @@ export const listChatMessages = query({
             weatherItems: searchResult.weatherItems ?? [],
             youtubeItems: searchResult.youtubeItems ?? [],
             shoppingItems: searchResult.shoppingItems ?? [],
-            mapLocation: searchResult.mapLocation,
-            googleMapsKey: searchResult.googleMapsKey,
             shouldShowTabs: searchResult.shouldShowTabs ?? false,
           },
         };
@@ -487,8 +483,6 @@ export const writeInitialSearchResponse = mutation({
     weatherItems: v.array(v.any()),
     youtubeItems: v.optional(v.array(v.any())),
     shoppingItems: v.optional(v.array(v.any())),
-    mapLocation: v.optional(v.string()),
-    googleMapsKey: v.optional(v.string()),
     shouldShowTabs: v.boolean(),
   },
   handler: async (ctx, args) => {
@@ -538,8 +532,6 @@ export const writeInitialSearchResponse = mutation({
       weatherItems: args.weatherItems,
       youtubeItems: args.youtubeItems,
       shoppingItems: args.shoppingItems,
-      mapLocation: args.mapLocation,
-      googleMapsKey: args.googleMapsKey,
       shouldShowTabs: args.shouldShowTabs,
     });
 
@@ -617,8 +609,6 @@ export const migrateSearchDataToSearchResults = internalMutation({
         weatherItems: Array.isArray(data.weatherItems) ? data.weatherItems : [],
         youtubeItems: Array.isArray(data.youtubeItems) ? data.youtubeItems : undefined,
         shoppingItems: Array.isArray(data.shoppingItems) ? data.shoppingItems : undefined,
-        mapLocation: data.mapLocation ?? undefined,
-        googleMapsKey: data.googleMapsKey ?? undefined,
         shouldShowTabs: Boolean(data.shouldShowTabs),
       });
 

@@ -165,7 +165,7 @@ export const ReasoningContent = memo(
       )}
       {...(props as any)}
     >
-      <div className="pl-4 border-l border-border/60">
+      <div className="px-4 sm:px-0 pl-4 border-l border-border/60">
         <Response className="grid gap-2 text-muted-foreground">
           {children}
         </Response>

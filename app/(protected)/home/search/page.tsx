@@ -41,8 +41,6 @@ export default async function SearchPage({
               isWeatherQuery={false}
               weatherItems={[]}
               youtubeItems={[]}
-              mapLocation={undefined}
-              googleMapsKey={process.env.GOOGLE_MAP_API_KEY}
               shoppingItems={[]}
             />
           </div>

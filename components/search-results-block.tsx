@@ -371,7 +371,7 @@ export function SearchResultsBlock({
   );
 
   return (
-    <div className="w-full space-y-4 pr-3">
+    <div className="w-full space-y-4 pr-3 pl-0">
       {/* Image lightbox for inline media */}
       {lightboxIndex !== null && chatMediaItemsLimited[lightboxIndex] && (
             <div

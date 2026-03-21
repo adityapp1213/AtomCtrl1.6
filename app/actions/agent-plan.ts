@@ -198,9 +198,12 @@ function looksLikeSmallTalkQuery(query: string) {
   ]);
   if (allowed.has(oneWord)) return true;
   if (/\b(thank you|thanks a lot|appreciate it)\b/.test(raw)) return true;
-  // Catch emotional expressions and complaints: "ugh", "oof", "meh", "sucks", "bad day", "not feeling", etc.
-  if (/\b(ugh|oof|meh|darn|argh|yikes|yikes)\b/.test(raw)) return true;
+  if (/\b(ugh|oof|meh|darn|argh|yikes)\b/.test(raw)) return true;
   if (/\b(bad day|rough day|terrible day|awful day|sucks|sucks?|feeling.*bad|not.*feeling|no.*good)\b/.test(raw)) return true;
+  if (/\b(how are you|how('?s| is) (it|things|life) (going|doing))\b/i.test(raw)) return true;
+  if (/\b(howdy|what'?s up|wassup|whassup|sup\?)\b/i.test(raw)) return true;
+  if (/\b(good (morning|afternoon|evening|day|night))\b/i.test(raw)) return true;
+  if (/\b(nice to (meet|see) you)\b/i.test(raw)) return true;
   return false;
 }
 
@@ -960,8 +963,6 @@ export async function runAgentPlan(
       youtubeItems,
       shoppingItems,
       shouldShowTabs: true,
-      mapLocation: undefined,
-      googleMapsKey: process.env.GOOGLE_MAP_API_KEY,
     },
   };
 }

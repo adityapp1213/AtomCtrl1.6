@@ -101,8 +101,6 @@ export type DynamicSearchResult = {
     youtubeItems?: YouTubeVideo[];
     shoppingItems?: ShoppingProduct[];
     shouldShowTabs: boolean;
-    mapLocation?: string;
-    googleMapsKey?: string;
   };
 };
 
@@ -326,8 +324,6 @@ export async function performDynamicSearch(
       youtubeItems,
       shoppingItems,
       shouldShowTabs: true,
-      mapLocation: intent.mapLocation,
-      googleMapsKey: process.env.GOOGLE_MAP_API_KEY,
     },
   };
 }

@@ -45,7 +45,6 @@ import {
 import { Browser, BrowserTab } from "@/components/ui/browser";
 import { saveChatSession, type PinnedItem } from "@/app/lib/chat-store";
 
-import { MapBlock } from "@/components/map-block";
 import Spinner7 from "@/components/spinner7";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
@@ -128,8 +127,6 @@ type SearchConversationShellProps = {
     error?: string | null;
   }>;
   youtubeItems?: YouTubeVideo[];
-  mapLocation?: string;
-  googleMapsKey?: string;
   shoppingItems?: Array<{
     id: string;
     title: string;
@@ -661,8 +658,6 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                 weatherItems: searchResult.data?.weatherItems || [],
                 youtubeItems: searchResult.data?.youtubeItems,
                 shoppingItems: searchResult.data?.shoppingItems,
-                mapLocation: searchResult.data?.mapLocation,
-                googleMapsKey: searchResult.data?.googleMapsKey,
                 shouldShowTabs: searchResult.data?.shouldShowTabs ?? true,
               });
               const savedResponseId = (saved as any)?.responseId;
@@ -906,10 +901,8 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
      scrapedItems: props.scrapedItems ?? [],
      isWeatherQuery: props.isWeatherQuery,
      weatherItems: props.weatherItems ?? [],
-     youtubeItems: props.youtubeItems ?? [],
-     mapLocation: props.mapLocation,
-     googleMapsKey: props.googleMapsKey,
-     tab: props.tab,
+      youtubeItems: props.youtubeItems ?? [],
+      tab: props.tab,
      pinnedItems: [] as PinnedItem[],
      shoppingItems: props.shoppingItems ?? [],
   });
@@ -925,8 +918,6 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
     isWeatherQuery,
     weatherItems,
     youtubeItems,
-    mapLocation,
-    googleMapsKey,
     tab,
     shoppingItems,
   } = contentState;
@@ -953,8 +944,6 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
         isWeatherQuery: false,
         weatherItems: [],
         youtubeItems: [],
-        mapLocation: undefined,
-        googleMapsKey: undefined,
         tab: props.tab,
         pinnedItems: [],
         shoppingItems: [],
@@ -992,8 +981,6 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
         isWeatherQuery: false,
         weatherItems: [],
         youtubeItems: [],
-        mapLocation: undefined,
-        googleMapsKey: undefined,
         tab: "chat",
         pinnedItems: [],
         shoppingItems: [],
@@ -1957,8 +1944,6 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
           weatherItems,
           youtubeItems,
           shouldShowTabs,
-          mapLocation,
-          googleMapsKey,
         },
       };
       return [syntheticSearch, ...messages];
@@ -2190,7 +2175,6 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                           lastAssistant.data.webItems.length > 0
                             ? lastAssistant.data.webItems[0]
                             : null,
-                        mapLocation: lastAssistant.data.mapLocation ?? null,
                       }
                     : null,
               }
@@ -2341,8 +2325,6 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                 weatherItems: searchResult.data?.weatherItems || [],
                 youtubeItems: searchResult.data?.youtubeItems,
                 shoppingItems: searchResult.data?.shoppingItems,
-                mapLocation: searchResult.data?.mapLocation,
-                googleMapsKey: searchResult.data?.googleMapsKey,
                 shouldShowTabs: searchResult.data?.shouldShowTabs ?? true,
               });
               const savedResponseId = (saved as any)?.responseId;
@@ -2642,9 +2624,9 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
             browserTabs.length > 0 ? "w-1/3 min-w-[350px] border-r" : "w-full"
           )}
         >
-          <div className="flex-1 w-full min-h-0 relative overflow-y-auto overflow-x-hidden">
+          <div className="flex-1 w-full min-h-0 relative overflow-y-auto overflow-x-hidden px-4 sm:px-0">
             <Conversation className="w-full h-full">
-              <ConversationContent className="max-w-5xl mx-auto px-4 pt-10 pb-64 md:pb-32">
+              <ConversationContent className="max-w-5xl mx-auto px-4 pt-10 pb-80 md:pb-32">
                 {(isChatSwitchLoading || isConvexChatLoading) && (
                   <div className="w-full flex justify-center">
                     <Spinner7 />
@@ -2683,26 +2665,6 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                                 <MessageContent className="mt-1">
                                   {overallSummaryLines.filter(Boolean).join(" ")}
                                 </MessageContent>
-                              </div>
-                            )}
-
-                            {mapLocation && (
-                              <div className="mb-6">
-                                <MessageContent className="mb-2">
-                                  I found {mapLocation} on the map. You can view it
-                                  in the side panel.
-                                </MessageContent>
-                                <MapBlock
-                                  location={mapLocation}
-                                  onOpenSideMap={() =>
-                                    handleLinkClick(
-                                      `/home/map-view?location=${encodeURIComponent(
-                                        mapLocation
-                                      )}`,
-                                      `Map: ${mapLocation}`
-                                    )
-                                  }
-                                />
                               </div>
                             )}
 
@@ -2806,27 +2768,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                                   </Reasoning>
                                 </div>
                               )}
-                              {msg.data.mapLocation && (
-                                <div className="mb-6">
-                                  <MessageContent className="mb-2">
-                                    I found {msg.data.mapLocation} on the map. You
-                                    can view it in the side panel.
-                                  </MessageContent>
-                                  <MapBlock
-                                    location={msg.data.mapLocation}
-                                    onOpenSideMap={() => {
-                                      const loc = msg.data?.mapLocation;
-                                      if (!loc) return;
-                                      handleLinkClick(
-                                        `/home/map-view?location=${encodeURIComponent(
-                                          loc
-                                        )}`,
-                                        `Map: ${loc}`
-                                      );
-                                    }}
-                                  />
-                                </div>
-                              )}
+
                               <SearchResultsBlock
                                 searchQuery={msg.data.searchQuery}
                                 overallSummaryLines={msg.data.overallSummaryLines}

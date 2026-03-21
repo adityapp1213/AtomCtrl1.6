@@ -39,8 +39,6 @@ export type ChatSession = {
   weatherItems: any[];
   youtubeItems: any[];
   shoppingItems?: any[];
-  mapLocation?: string;
-  googleMapsKey?: string;
   shouldShowTabs: boolean;
   tab: string;
   pinnedItems?: PinnedItem[];

@@ -24,7 +24,6 @@ export type DetectResult = {
   shouldShowTabs: boolean;
   searchQuery: string | null;
   overallSummaryLines: string[];
-  mapLocation?: string;
   youtubeQuery?: string;
   webSearchQuery?: string;
   shoppingQuery?: string;
@@ -113,56 +112,6 @@ export function looksLikeSmallTalk(query: string): boolean {
   return false;
 }
 
-function shouldAllowMapLocation(location: string, userQuery: string): boolean {
-  const loc = (location ?? "").trim().replace(/^['"`]+|['"`]+$/g, "");
-  const q = (userQuery ?? "").trim();
-  if (!loc || !q) return false;
-  if (looksLikeSmallTalk(loc) || looksLikeSmallTalk(q)) return false;
-
-  const words = loc.split(/\s+/).filter(Boolean);
-  // Hard guard against long paragraphs or big sentences being treated as locations
-  if (loc.length > 80 || words.length > 8) return false;
-
-  const qLower = q.toLowerCase();
-  const hasExplicitMapIntent =
-    /\b(map|maps|directions|direction|route|navigate|navigation|location|address|where is|nearest|closest)\b/i.test(
-      qLower
-    );
-
-  const hasMediaIntent = /\b(youtube|yt|video|videos)\b/i.test(qLower);
-  if (hasMediaIntent && !hasExplicitMapIntent) return false;
-
-  const hasDigits = /\d/.test(loc);
-  const hasComma = loc.includes(",");
-  const hasTwoOrMoreWords = words.length >= 2;
-
-  const hasPlaceKeyword =
-    /\b(city|country|state|province|county|street|st|road|rd|avenue|ave|boulevard|blvd|drive|dr|lane|ln|place|pl|square|sq|mall|market|park|museum|airport|station|university|college|hospital|hotel|restaurant|cafe|bar|shop|store|beach|trail|temple|church|mosque)\b/i.test(
-      qLower
-    );
-
-  if (hasExplicitMapIntent) return true;
-  if ((hasDigits || hasComma) && (hasExplicitMapIntent || hasPlaceKeyword)) return true;
-
-  const hasGeoPreposition = /\b(in|near|around|at)\b/i.test(qLower);
-  if (hasTwoOrMoreWords && (hasGeoPreposition || hasPlaceKeyword)) return true;
-
-  if (words.length === 1) {
-    const single = words[0];
-    if (!single) return false;
-    const hasUpper = /[A-Z]/.test(location) || /[A-Z]/.test(q);
-    if (!hasUpper) return false;
-    const blockedSingle =
-      /\b(dog|dogs|cat|cats|animal|animals|song|songs|lyrics|video|videos|youtube|yt|joke|jokes|meme|memes|recipe|recipes|code|api|error)\b/i.test(
-        qLower
-      );
-    if (blockedSingle) return false;
-    return true;
-  }
-
-  return false;
-}
-
 export async function detectIntent(
   query: string,
   context?: string[]
@@ -237,7 +186,6 @@ export async function detectIntent(
   let shouldShowTabs = false;
   let searchQuery: string | null = null;
   let overallSummaryLines: string[] = [];
-  let mapLocation: string | undefined;
   let youtubeQuery: string | undefined;
   let webSearchQuery: string | null = null;
   let shoppingQuery: string | null = null;
@@ -289,11 +237,6 @@ export async function detectIntent(
               description:
                 "Optional YouTube search query when the user mainly wants videos. Empty string if not needed.",
             },
-            mapLocation: {
-              type: ["string", "null"],
-              description:
-                "Optional city, place name, or address for maps when the query is about a location.",
-            },
             shoppingQuery: {
               type: ["string", "null"],
               description:
@@ -330,11 +273,6 @@ export async function detectIntent(
               description:
                 "Optional YouTube search query when the user mainly wants videos. Empty string if not needed.",
             },
-            mapLocation: {
-              type: ["string", "null"],
-              description:
-                "Optional city, place name, or address for maps when the query is about a location.",
-            },
             shoppingQuery: {
               type: ["string", "null"],
               description:
@@ -365,15 +303,6 @@ export async function detectIntent(
           type: "object",
           properties: { query: { type: "string", description: "Search query" } },
           required: ["query"],
-        },
-      },
-      {
-        name: "google_maps",
-        description: "Show a map, directions, or location for the query",
-        parameters: {
-          type: "object",
-          properties: { location: { type: "string", description: "Location name or address" } },
-          required: ["location"],
         },
       },
       {
@@ -436,17 +365,6 @@ export async function detectIntent(
               overallSummaryLines = [`Found videos for: ${yq}`, ""];
             }
           }
-          const loc = String(args.mapLocation ?? "").trim();
-          if (loc && shouldAllowMapLocation(loc, safeQuery)) {
-            shouldShowTabs = true;
-            mapLocation = loc;
-            if (!searchQuery) {
-              searchQuery = loc;
-            }
-            if (overallSummaryLines.length === 0) {
-              overallSummaryLines = [`Showing map for: ${loc}`, ""];
-            }
-          }
           const shop = String(args.shoppingQuery ?? "").trim();
           if (shop) {
             shouldShowTabs = true;
@@ -477,20 +395,6 @@ export async function detectIntent(
           }
           if (overallSummaryLines.length === 0) {
              overallSummaryLines = [`Found videos for: ${youtubeQuery}`, ""];
-          }
-        } else if (fc.name === "google_maps") {
-          const loc = typeof args.location === "string" ? args.location : String(args.location ?? "");
-          if (!shouldAllowMapLocation(loc, safeQuery)) {
-            continue;
-          }
-          shouldShowTabs = true;
-          mapLocation = loc;
-          // If search query not set yet, use location
-          if (!searchQuery) {
-            searchQuery = mapLocation;
-          }
-          if (overallSummaryLines.length === 0) {
-            overallSummaryLines = [`Showing map for: ${mapLocation}`, ""];
           }
         } else if (fc.name === "get_current_fx_rate") {
           try {
@@ -535,7 +439,7 @@ export async function detectIntent(
       overallSummaryLines = [pre?.text || safeQuery.slice(0, 120), ""];
     }
 
-    if (shouldShowTabs && !webSearchQuery && !youtubeQuery && !mapLocation && !shoppingQuery) {
+    if (shouldShowTabs && !webSearchQuery && !youtubeQuery && !shoppingQuery) {
       shouldShowTabs = false;
     }
 
@@ -543,7 +447,6 @@ export async function detectIntent(
       shouldShowTabs,
       searchQuery,
       overallSummaryLines,
-      mapLocation,
       youtubeQuery,
       webSearchQuery: webSearchQuery || undefined,
       shoppingQuery: shoppingQuery || undefined,
@@ -570,7 +473,6 @@ export async function detectIntent(
     shouldShowTabs,
     searchQuery,
     overallSummaryLines,
-    mapLocation,
     youtubeQuery,
     webSearchQuery: webSearchQuery || undefined,
     shoppingQuery: shoppingQuery || undefined,
