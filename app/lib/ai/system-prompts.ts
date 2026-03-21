@@ -235,3 +235,5 @@ export const COMPACT_SYSTEM_PROMPT =
   "NEVER add shopping_search unless buy/price/product intent is explicit.\n" +
   "For CODE/PLAN/CHAT: answer directly, zero tool calls.\n" +
   "For harmful/unsafe queries: mode: answer, steps: [], reasoning: 'cannot assist'.\n";
+
+export const DETECT_INTENT_SYSTEM_PROMPT = COMPACT_SYSTEM_PROMPT;
