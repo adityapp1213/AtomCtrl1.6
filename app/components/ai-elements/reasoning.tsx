@@ -11,6 +11,7 @@ import { ChevronDownIcon } from 'lucide-react';
 import type { ComponentProps } from 'react';
 import { createContext, memo, useContext, useEffect, useState } from 'react';
 import { Response } from './response';
+import { AtomLogo } from '@/components/logo';
 
 type ReasoningContextValue = {
   isStreaming: boolean;
@@ -135,6 +136,7 @@ export const ReasoningTrigger = memo(
       >
         {children ?? (
           <>
+            <AtomLogo size={36} className="text-muted-foreground shrink-0" />
             <p className="text-muted-foreground">Thinking...</p>
             <ChevronDownIcon
               className={cn(

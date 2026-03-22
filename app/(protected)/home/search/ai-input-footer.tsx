@@ -2654,12 +2654,12 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                         </div>
                       </Message>
 
-                      <Message from="assistant" className="mr-auto">
-                        <div className="flex items-start gap-3 w-full flex-row">
-                          <div className="shrink-0">
+                      <Message from="assistant" className="mr-auto sm:mr-0">
+                        <div className="flex items-start gap-3 w-full flex-row sm:flex-col sm:gap-0">
+                          <div className="shrink-0 hidden sm:block">
                             <AtomLogo size={28} className="text-foreground" />
                           </div>
-                          <div className="w-full pt-1">
+                          <div className="w-full pt-1 pl-0">
                             {overallSummaryLines.length > 0 && !shouldShowTabs && (
                               <div className="mb-4">
                                 <MessageContent className="mt-1">
@@ -2751,11 +2751,11 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                           )}
                         >
                         {msg.type === "search" && msg.data ? (
-                          <div className="flex items-start gap-3 w-full flex-row">
-                            <div className="shrink-0">
+                          <div className="flex items-start gap-3 w-full flex-row sm:flex-col sm:gap-0">
+                            <div className="shrink-0 hidden sm:block">
                               <AtomLogo size={28} className="text-foreground" />
                             </div>
-                            <div className="w-full pt-1 pb-4 md:pb-0">
+                            <div className="w-full pt-1 pb-4 md:pb-0 pl-0 sm:pl-0">
                               {msg.planReasoning && (
                                 <div className="mb-3">
                                   <Reasoning
@@ -2799,11 +2799,11 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                         ) : (
                           <>
                             {msg.role === "assistant" ? (
-                              <div className="flex items-start gap-3 w-full flex-row">
-                                <div className="shrink-0">
+                              <div className="flex items-start gap-3 w-full flex-row sm:flex-col sm:gap-0">
+                                <div className="shrink-0 hidden sm:block">
                                   <AtomLogo size={28} className="text-foreground" />
                                 </div>
-                              <div className="w-full pt-1 pb-4 md:pb-0">
+                              <div className="w-full pt-1 pb-4 md:pb-0 pl-0 sm:pl-0">
                                   {msg.planReasoning && (
                                     <div className="mb-3">
                                       <Reasoning

@@ -388,7 +388,7 @@ export function SearchResultsBlock({
   return (
     <div className="w-full">
 
-      {/* Image lightbox lives outside scroll container so fixed positioning works */}
+      {/* Lightbox — outside scroll container so fixed positioning covers full viewport */}
       {lightboxIndex !== null && chatMediaItemsLimited[lightboxIndex] && (
         <div
           className="fixed inset-0 z-[70] bg-black/90 flex items-center justify-center"
@@ -406,12 +406,8 @@ export function SearchResultsBlock({
             onClick={(e) => {
               e.stopPropagation();
               setLightboxIndex((prev) => {
-                if (prev === null || chatMediaItemsLimited.length === 0)
-                  return prev;
-                return (
-                  (prev - 1 + chatMediaItemsLimited.length) %
-                  chatMediaItemsLimited.length
-                );
+                if (prev === null || chatMediaItemsLimited.length === 0) return prev;
+                return (prev - 1 + chatMediaItemsLimited.length) % chatMediaItemsLimited.length;
               });
             }}
             className="absolute left-6 text-white/80 hover:text-white"
@@ -434,8 +430,7 @@ export function SearchResultsBlock({
             onClick={(e) => {
               e.stopPropagation();
               setLightboxIndex((prev) => {
-                if (prev === null || chatMediaItemsLimited.length === 0)
-                  return prev;
+                if (prev === null || chatMediaItemsLimited.length === 0) return prev;
                 return (prev + 1) % chatMediaItemsLimited.length;
               });
             }}
@@ -446,289 +441,267 @@ export function SearchResultsBlock({
         </div>
       )}
 
-      {/* Horizontal scroll wrapper for mobile */}
+      {/* Horizontal scroll container — mobile only */}
       <div className="overflow-x-auto sm:overflow-x-visible [&::-webkit-scrollbar]:hidden [-webkit-overflow-scrolling:touch]">
-        <div className="min-w-0 w-full space-y-4 px-4 sm:px-0">
 
-      {/* Response (top) */}
-      <div className="space-y-3">
-        {fullAnswerText ? (
-          <div className="text-sm">
-            {renderSummaryWithCitations(
-              summaryIsStreaming ? fullAnswerText : formattedAnswerMarkdown
+        {/* Inner content — min-w allows content to express its natural width */}
+        <div className="min-w-[320px] w-full space-y-4 pr-4 pl-0 sm:px-0">
+
+          {/* Summary / answer text */}
+          <div className="space-y-3">
+            {fullAnswerText ? (
+              <div className="text-sm">
+                {renderSummaryWithCitations(
+                  summaryIsStreaming ? fullAnswerText : formattedAnswerMarkdown
+                )}
+              </div>
+            ) : (
+              <div className="text-sm text-muted-foreground">
+                {summaryIsStreaming ? "Thinking!!" : "No results found."}
+              </div>
             )}
           </div>
-        ) : (
-          <div className="text-sm text-muted-foreground">
-            {summaryIsStreaming ? "Thinking!!" : "No results found."}
-          </div>
-        )}
-      </div>
 
-      {chatMediaItemsLimited.length > 0 && (
-        <div className="w-full">
-          <div className="relative w-full">
-            <div
-              className="aspect-video bg-accent rounded-md border overflow-hidden flex items-center justify-center"
-              onTouchStart={handleMediaTouchStart}
-              onTouchEnd={handleMediaTouchEnd}
-              onClick={() => setLightboxIndex(mediaIndex)}
-            >
-              {chatMediaItemsLimited[mediaIndex] && (
-                <img
-                  src={chatMediaItemsLimited[mediaIndex].src}
-                  alt={chatMediaItemsLimited[mediaIndex].alt ?? ""}
-                  loading="eager"
-                  referrerPolicy="no-referrer"
-                  className="w-full h-full object-cover"
-                  onLoad={onMediaLoad}
-                  onError={onMediaLoad}
-                />
-              )}
-              {chatMediaItemsLimited.length > 1 && (
-                <>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleMediaPrev();
-                    }}
-                    className="absolute left-2 top-1/2 -translate-y-1/2 bg-black/60 text-white rounded-full p-1"
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleMediaNext();
-                    }}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 bg-black/60 text-white rounded-full p-1"
-                  >
-                    <ChevronRight className="w-4 h-4" />
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Response (bottom) */}
-      {!summaryIsStreaming && sourcesMarkdown && (
-        <div className="space-y-3">
-          <div className="text-sm">
-            <Response
-              className="text-sm leading-relaxed"
-              parseIncompleteMarkdown
-            >
-              {sourcesMarkdown}
-            </Response>
-          </div>
-        </div>
-      )}
-
-      {scrapedItemsLimited.length > 0 && (
-        <div className="w-full space-y-2">
-          <div className="text-xs font-medium text-muted-foreground">
-            Site-wise details
-          </div>
-          {scrapedItemsLimited.map((item, idx) => {
-            const url = item.url;
-            const display = formatDisplayUrl(url);
-            return (
-              <div
-                key={`${url}:${idx}`}
-                className="rounded-lg border border-border/60 bg-background/70 px-4 py-3"
-              >
-                <button
-                  type="button"
-                  className="text-xs font-medium text-primary underline break-words"
-                  onClick={() => onLinkClick?.(url, display)}
+          {/* Image carousel */}
+          {chatMediaItemsLimited.length > 0 && (
+            <div className="w-full">
+              <div className="relative w-full">
+                <div
+                  className="aspect-video bg-accent rounded-md border overflow-hidden flex items-center justify-center"
+                  onTouchStart={handleMediaTouchStart}
+                  onTouchEnd={handleMediaTouchEnd}
+                  onClick={() => setLightboxIndex(mediaIndex)}
                 >
-                  {display}
-                </button>
-                <div className="mt-1 text-sm">
-                  <Response parseIncompleteMarkdown>{item.summary}</Response>
+                  {chatMediaItemsLimited[mediaIndex] && (
+                    <img
+                      src={chatMediaItemsLimited[mediaIndex].src}
+                      alt={chatMediaItemsLimited[mediaIndex].alt ?? ""}
+                      loading="eager"
+                      referrerPolicy="no-referrer"
+                      className="w-full h-full object-cover"
+                      onLoad={onMediaLoad}
+                      onError={onMediaLoad}
+                    />
+                  )}
+                  {chatMediaItemsLimited.length > 1 && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); handleMediaPrev(); }}
+                        className="absolute left-2 top-1/2 -translate-y-1/2 bg-black/60 text-white rounded-full p-1"
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); handleMediaNext(); }}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 bg-black/60 text-white rounded-full p-1"
+                      >
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Videos (if any) */}
-      {youtubeItems && youtubeItems.length > 0 && (
-        <div className="w-full">
-          <VideoList
-            videos={youtubeItems}
-            onLinkClick={onLinkClick}
-            onPinItem={onPinItem}
-            pinnedIds={pinnedIds}
-          />
-        </div>
-      )}
-
-      {/* Shopping products */}
-      {shoppingItemsLimited.length > 0 && (
-        <div className="w-full space-y-3">
-          <div className="relative w-full">
-            <div
-              className="rounded-lg border bg-accent/40 hover:bg-accent transition-colors p-3 text-left overflow-hidden"
-              onTouchStart={handleShoppingTouchStart}
-              onTouchEnd={handleShoppingTouchEnd}
-            >
-              {shoppingItemsLimited[shoppingIndex] && (() => {
-                const item = shoppingItemsLimited[shoppingIndex];
-                const src = normalizeExternalUrl(item.thumbnailUrl);
-                return (
-                  <a
-                    href={item.link}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex gap-3"
-                  >
-                    {src && (
-                      <div className="relative h-20 w-20 shrink-0 rounded-md overflow-hidden bg-background/40">
-                        <Image
-                          src={src}
-                          alt={item.title}
-                          fill
-                          className="object-contain"
-                          sizes="80px"
-                          loading="lazy"
-                          unoptimized
-                          referrerPolicy="no-referrer"
-                        />
-                      </div>
-                    )}
-                    <div className="min-w-0 flex-1 space-y-1 pr-8">
-                      <div className="text-sm font-medium leading-snug line-clamp-2 break-words">
-                        {item.title}
-                      </div>
-                      {item.descriptionSnippet && (
-                        <div className="text-xs text-muted-foreground line-clamp-2 break-words">
-                          {item.descriptionSnippet}
-                        </div>
-                      )}
-                      <div className="flex items-center gap-2 flex-wrap">
-                        {item.priceText && (
-                          <div className="text-sm font-semibold">
-                            {item.priceText}
-                          </div>
-                        )}
-                        {(item.rating != null || item.reviewCount != null) && (
-                          <div className="text-xs text-muted-foreground">
-                            {item.rating != null && (
-                              <span>{item.rating.toFixed(1)}</span>
-                            )}
-                            {item.rating != null && item.reviewCount != null && (
-                              <span> • </span>
-                            )}
-                            {item.reviewCount != null && (
-                              <span>
-                                {item.reviewCount.toLocaleString()} reviews
-                              </span>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                      {item.source && (
-                        <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                          {item.sourceIconUrl &&
-                            normalizeExternalUrl(item.sourceIconUrl) && (
-                              <span className="relative h-4 w-4 overflow-hidden rounded-full bg-background/60">
-                                <Image
-                                  src={normalizeExternalUrl(item.sourceIconUrl)!}
-                                  alt={item.source}
-                                  fill
-                                  className="object-contain"
-                                  sizes="16px"
-                                  loading="lazy"
-                                  unoptimized
-                                  referrerPolicy="no-referrer"
-                                />
-                              </span>
-                            )}
-                          <span className="truncate">{item.source}</span>
-                        </div>
-                      )}
-                    </div>
-                  </a>
-                );
-              })()}
-
-              {shoppingItemsLimited.length > 1 && (
-                <>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleShoppingPrev();
-                    }}
-                    className="absolute left-2 top-1/2 -translate-y-1/2 bg-black/60 text-white rounded-full p-1"
-                    aria-label="Previous product"
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleShoppingNext();
-                    }}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 bg-black/60 text-white rounded-full p-1"
-                    aria-label="Next product"
-                  >
-                    <ChevronRight className="w-4 h-4" />
-                  </button>
-                </>
-              )}
             </div>
-            {shoppingItemsLimited.length > 1 && (
-              <div className="mt-2 text-xs text-muted-foreground text-center tabular-nums">
-                {shoppingIndex + 1}/{shoppingItemsLimited.length}
+          )}
+
+          {/* Sources list */}
+          {!summaryIsStreaming && sourcesMarkdown && (
+            <div className="space-y-3">
+              <div className="text-sm">
+                <Response className="text-sm leading-relaxed" parseIncompleteMarkdown>
+                  {sourcesMarkdown}
+                </Response>
               </div>
+            </div>
+          )}
+
+          {/* Scraped site details */}
+          {scrapedItemsLimited.length > 0 && (
+            <div className="w-full space-y-2">
+              <div className="text-xs font-medium text-muted-foreground">
+                Site-wise details
+              </div>
+              {scrapedItemsLimited.map((item, idx) => {
+                const url = item.url;
+                const display = formatDisplayUrl(url);
+                return (
+                  <div
+                    key={`${url}:${idx}`}
+                    className="rounded-lg border border-border/60 bg-background/70 px-4 py-3"
+                  >
+                    <button
+                      type="button"
+                      className="text-xs font-medium text-primary underline break-all [overflow-wrap:anywhere]"
+                      onClick={() => onLinkClick?.(url, display)}
+                    >
+                      {display}
+                    </button>
+                    <div className="mt-1 text-sm">
+                      <Response parseIncompleteMarkdown>{item.summary}</Response>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* YouTube videos */}
+          {youtubeItems && youtubeItems.length > 0 && (
+            <div className="w-full">
+              <VideoList
+                videos={youtubeItems}
+                onLinkClick={onLinkClick}
+                onPinItem={onPinItem}
+                pinnedIds={pinnedIds}
+              />
+            </div>
+          )}
+
+          {/* Shopping products */}
+          {shoppingItemsLimited.length > 0 && (
+            <div className="w-full space-y-3">
+              <div className="relative w-full">
+                <div
+                  className="rounded-lg border bg-accent/40 hover:bg-accent transition-colors p-3 text-left overflow-hidden"
+                  onTouchStart={handleShoppingTouchStart}
+                  onTouchEnd={handleShoppingTouchEnd}
+                >
+                  {shoppingItemsLimited[shoppingIndex] && (() => {
+                    const item = shoppingItemsLimited[shoppingIndex];
+                    const src = normalizeExternalUrl(item.thumbnailUrl);
+                    return (
+                      <a
+                        href={item.link}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex gap-3"
+                      >
+                        {src && (
+                          <div className="relative h-20 w-20 shrink-0 rounded-md overflow-hidden bg-background/40">
+                            <Image
+                              src={src}
+                              alt={item.title}
+                              fill
+                              className="object-contain"
+                              sizes="80px"
+                              loading="lazy"
+                              unoptimized
+                              referrerPolicy="no-referrer"
+                            />
+                          </div>
+                        )}
+                        <div className="min-w-0 flex-1 space-y-1 pr-8">
+                          <div className="text-sm font-medium leading-snug line-clamp-2 break-words">
+                            {item.title}
+                          </div>
+                          {item.descriptionSnippet && (
+                            <div className="text-xs text-muted-foreground line-clamp-2 break-words">
+                              {item.descriptionSnippet}
+                            </div>
+                          )}
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {item.priceText && (
+                              <div className="text-sm font-semibold">{item.priceText}</div>
+                            )}
+                            {(item.rating != null || item.reviewCount != null) && (
+                              <div className="text-xs text-muted-foreground">
+                                {item.rating != null && <span>{item.rating.toFixed(1)}</span>}
+                                {item.rating != null && item.reviewCount != null && <span> • </span>}
+                                {item.reviewCount != null && (
+                                  <span>{item.reviewCount.toLocaleString()} reviews</span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                          {item.source && (
+                            <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+                              {item.sourceIconUrl && normalizeExternalUrl(item.sourceIconUrl) && (
+                                <span className="relative h-4 w-4 overflow-hidden rounded-full bg-background/60">
+                                  <Image
+                                    src={normalizeExternalUrl(item.sourceIconUrl)!}
+                                    alt={item.source}
+                                    fill
+                                    className="object-contain"
+                                    sizes="16px"
+                                    loading="lazy"
+                                    unoptimized
+                                    referrerPolicy="no-referrer"
+                                  />
+                                </span>
+                              )}
+                              <span className="truncate">{item.source}</span>
+                            </div>
+                          )}
+                        </div>
+                      </a>
+                    );
+                  })()}
+                  {shoppingItemsLimited.length > 1 && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); handleShoppingPrev(); }}
+                        className="absolute left-2 top-1/2 -translate-y-1/2 bg-black/60 text-white rounded-full p-1"
+                        aria-label="Previous product"
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); handleShoppingNext(); }}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 bg-black/60 text-white rounded-full p-1"
+                        aria-label="Next product"
+                      >
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                    </>
+                  )}
+                </div>
+                {shoppingItemsLimited.length > 1 && (
+                  <div className="mt-2 text-xs text-muted-foreground text-center tabular-nums">
+                    {shoppingIndex + 1}/{shoppingItemsLimited.length}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Weather widgets */}
+          {weatherItems && weatherItems.length > 0 && (
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {weatherItems.map((w, i) => (
+                  <div key={i} className="flex justify-center">
+                    <WeatherWidget
+                      width="100%"
+                      className="w-full"
+                      location={
+                        w.latitude && w.longitude
+                          ? { latitude: w.latitude, longitude: w.longitude }
+                          : undefined
+                      }
+                      onFetchWeather={async () => {
+                        if (w.data) return w.data;
+                        throw new Error(w.error || "Weather unavailable");
+                      }}
+                      onError={() => {}}
+                      onWeatherLoaded={() => {}}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Empty state */}
+          {!webItems.length &&
+            !weatherItems?.length &&
+            !hasAnyAnswerText &&
+            !summaryIsStreaming && (
+              <div className="text-sm text-muted-foreground">No results found.</div>
             )}
-          </div>
-        </div>
-      )}
-
-      {/* Weather widgets */}
-      {weatherItems && weatherItems.length > 0 && (
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {weatherItems.map((w, i) => (
-              <div key={i} className="flex justify-center">
-                <WeatherWidget
-                  width="100%"
-                  className="w-full"
-                  location={
-                    w.latitude && w.longitude
-                      ? { latitude: w.latitude, longitude: w.longitude }
-                      : undefined
-                  }
-                  onFetchWeather={async () => {
-                    if (w.data) return w.data;
-                    throw new Error(w.error || "Weather unavailable");
-                  }}
-                  onError={() => {}}
-                  onWeatherLoaded={() => {}}
-                />
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Web result cards are not shown in inline search; sources are surfaced via InlineCitation.
-          If there is no summary, weather, or other content, show a fallback message. */}
-      {!webItems.length &&
-        !weatherItems?.length &&
-        !hasAnyAnswerText &&
-        !summaryIsStreaming && (
-          <div className="text-sm text-muted-foreground">No results found.</div>
-        )}
 
         </div>
       </div>

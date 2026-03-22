@@ -26,7 +26,7 @@ export async function youtubeSearch(
   }
 
   const requestedNum = typeof options.maxResults === "number" ? options.maxResults : 5;
-  const maxResults = Math.min(Math.max(requestedNum, 1), 10);
+  const maxResults = Math.min(Math.max(requestedNum, 1), 5);
   
   const url = new URL("https://www.googleapis.com/youtube/v3/search");
   url.searchParams.set("key", apiKey);
