@@ -386,64 +386,69 @@ export function SearchResultsBlock({
   );
 
   return (
-    <div className="w-full space-y-4 px-4 sm:px-0">
-      {/* Image lightbox for inline media */}
+    <div className="w-full">
+
+      {/* Image lightbox lives outside scroll container so fixed positioning works */}
       {lightboxIndex !== null && chatMediaItemsLimited[lightboxIndex] && (
-            <div
-              className="fixed inset-0 z-[70] bg-black/90 flex items-center justify-center"
-              onClick={() => setLightboxIndex(null)}
-            >
-              <button
-                type="button"
-                onClick={() => setLightboxIndex(null)}
-                className="absolute top-6 right-6 text-white/80 hover:text-white"
-              >
-                <X className="w-6 h-6" />
-              </button>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setLightboxIndex((prev) => {
-                    if (prev === null || chatMediaItemsLimited.length === 0)
-                      return prev;
-                    return (
-                      (prev - 1 + chatMediaItemsLimited.length) %
-                      chatMediaItemsLimited.length
-                    );
-                  });
-                }}
-                className="absolute left-6 text-white/80 hover:text-white"
-              >
-                <ChevronLeft className="w-8 h-8" />
-              </button>
-              <div
-                className="max-w-5xl w-full px-10"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <img
-                  src={chatMediaItemsLimited[lightboxIndex].src}
-                  alt={chatMediaItemsLimited[lightboxIndex].alt ?? ""}
-                  referrerPolicy="no-referrer"
-                  className="w-full max-h-[80vh] object-contain rounded-lg"
-                />
-              </div>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setLightboxIndex((prev) => {
-                    if (prev === null || chatMediaItemsLimited.length === 0)
-                      return prev;
-                    return (prev + 1) % chatMediaItemsLimited.length;
-                  });
-                }}
-                className="absolute right-6 text-white/80 hover:text-white"
-              >
-                <ChevronRight className="w-8 h-8" />
-              </button>
-            </div>
-          )}
+        <div
+          className="fixed inset-0 z-[70] bg-black/90 flex items-center justify-center"
+          onClick={() => setLightboxIndex(null)}
+        >
+          <button
+            type="button"
+            onClick={() => setLightboxIndex(null)}
+            className="absolute top-6 right-6 text-white/80 hover:text-white"
+          >
+            <X className="w-6 h-6" />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setLightboxIndex((prev) => {
+                if (prev === null || chatMediaItemsLimited.length === 0)
+                  return prev;
+                return (
+                  (prev - 1 + chatMediaItemsLimited.length) %
+                  chatMediaItemsLimited.length
+                );
+              });
+            }}
+            className="absolute left-6 text-white/80 hover:text-white"
+          >
+            <ChevronLeft className="w-8 h-8" />
+          </button>
+          <div
+            className="max-w-5xl w-full px-10"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <img
+              src={chatMediaItemsLimited[lightboxIndex].src}
+              alt={chatMediaItemsLimited[lightboxIndex].alt ?? ""}
+              referrerPolicy="no-referrer"
+              className="w-full max-h-[80vh] object-contain rounded-lg"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setLightboxIndex((prev) => {
+                if (prev === null || chatMediaItemsLimited.length === 0)
+                  return prev;
+                return (prev + 1) % chatMediaItemsLimited.length;
+              });
+            }}
+            className="absolute right-6 text-white/80 hover:text-white"
+          >
+            <ChevronRight className="w-8 h-8" />
+          </button>
+        </div>
+      )}
+
+      {/* Horizontal scroll wrapper for mobile */}
+      <div className="overflow-x-auto sm:overflow-x-visible [&::-webkit-scrollbar]:hidden [-webkit-overflow-scrolling:touch]">
+        <div className="min-w-0 w-full space-y-4 px-4 sm:px-0">
 
       {/* Response (top) */}
       <div className="space-y-3">
@@ -724,6 +729,9 @@ export function SearchResultsBlock({
         !summaryIsStreaming && (
           <div className="text-sm text-muted-foreground">No results found.</div>
         )}
+
+        </div>
+      </div>
     </div>
   );
 }
