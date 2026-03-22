@@ -48,6 +48,16 @@ function formatDisplayUrl(value: string) {
   }
 }
 
+function isUsableSummaryLine(line: string): boolean {
+  const t = (line ?? "").trim();
+  if (!t || t.length < 20) return false;
+  if (/^\d/.test(t)) return false;
+  if (/\.\.$/.test(t)) return false;
+  if (/^\s*\d{1,2}\s+\w+\s+\d{4}/.test(t)) return false;
+  if ((t.match(/\s/g) || []).length < 3) return false;
+  return true;
+}
+
 // Define locally to avoid server-client import issues if any
 type YouTubeVideo = {
   id: string;
@@ -138,13 +148,11 @@ export function SearchResultsBlock({
     !hasAnyAnswerText && Array.isArray(webItems) && webItems.length > 0
       ? webItems
           .slice(0, 4)
-          .map((item) => {
-            const line =
-              item.summaryLines?.find((l) => l && l.trim().length > 0) || "";
-            return line;
-          })
-          .filter(Boolean)
-          .join("\n")
+          .flatMap((item) => item.summaryLines ?? [])
+          .filter(isUsableSummaryLine)
+          .slice(0, 3)
+          .join(" ")
+          .trim()
       : "";
   const fullAnswerText =
     (displayText || "").trim() ||
@@ -154,29 +162,36 @@ export function SearchResultsBlock({
     const raw = String(fullAnswerText || "").trim();
     if (!raw) return "";
 
-    // Check if text already has markdown formatting (bullets, headings, etc.)
-    // If so, don't reformat - just return as-is to avoid double formatting
     if (hasMarkdownFormatting(raw)) {
       return raw;
     }
 
-    // Plain text - format it into a clean structure
+    const parts = raw
+      .split(/(?<=[.!?])\s+/)
+      .map((s) => s.trim())
+      .filter((s) => {
+        if (!s || s.length < 15) return false;
+        if (/^\d/.test(s)) return false;
+        if (/\.\.$/.test(s)) return false;
+        if ((s.match(/\s/g) || []).length < 2) return false;
+        return true;
+      });
+
     const q = (searchQuery || "").trim();
     const isQuestionLike =
       /\?/.test(q) ||
-      /\b(what|who|when|where|why|how|explain|tell me|describe|give me)\b/i.test(
-        q
-      );
-    const heading = isQuestionLike && q
-      ? `### Answer\n\n**Question:** ${q}\n\n`
-      : "### Summary\n\n";
-    const parts = raw
-      .split(/[.!?]\s+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-    if (parts.length <= 2) {
-      return heading + raw;
+      /\b(what|who|when|where|why|how|explain|tell me|describe|give me)\b/i.test(q);
+
+    if (parts.length <= 1) {
+      return raw;
     }
+
+    if (parts.length <= 4) {
+      const heading = isQuestionLike ? "### Answer\n\n" : "### Summary\n\n";
+      return `${heading}${parts.join(" ")}`;
+    }
+
+    const heading = isQuestionLike ? "### Answer\n\n" : "### Summary\n\n";
     const [intro, ...rest] = parts;
     const bullets = rest.map((s) => `- ${s}`).join("\n");
     return `${heading}${intro}\n\n#### Key points\n\n${bullets}`;
@@ -371,7 +386,7 @@ export function SearchResultsBlock({
   );
 
   return (
-    <div className="w-full space-y-4 pr-3 pl-0">
+    <div className="w-full space-y-4 px-4 sm:px-0">
       {/* Image lightbox for inline media */}
       {lightboxIndex !== null && chatMediaItemsLimited[lightboxIndex] && (
             <div
@@ -539,7 +554,7 @@ export function SearchResultsBlock({
 
       {/* Videos (if any) */}
       {youtubeItems && youtubeItems.length > 0 && (
-        <div className="w-full pr-3">
+        <div className="w-full">
           <VideoList
             videos={youtubeItems}
             onLinkClick={onLinkClick}
@@ -551,7 +566,7 @@ export function SearchResultsBlock({
 
       {/* Shopping products */}
       {shoppingItemsLimited.length > 0 && (
-        <div className="w-full space-y-3 pr-3">
+        <div className="w-full space-y-3">
           <div className="relative w-full">
             <div
               className="rounded-lg border bg-accent/40 hover:bg-accent transition-colors p-3 text-left overflow-hidden"
@@ -582,7 +597,7 @@ export function SearchResultsBlock({
                         />
                       </div>
                     )}
-                    <div className="min-w-0 flex-1 space-y-1">
+                    <div className="min-w-0 flex-1 space-y-1 pr-8">
                       <div className="text-sm font-medium leading-snug line-clamp-2 break-words">
                         {item.title}
                       </div>

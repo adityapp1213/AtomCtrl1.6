@@ -230,7 +230,7 @@ const components: Options['components'] = {
   ),
   a: ({ node, children, className, ...props }) => (
     <a
-      className={cn('font-medium text-primary underline break-words', className)}
+      className={cn('font-medium text-primary underline break-all overflow-wrap-anywhere', className)}
       rel="noreferrer"
       target="_blank"
       {...(props as any)}
