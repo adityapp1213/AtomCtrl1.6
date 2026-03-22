@@ -18,7 +18,7 @@ import {
   Message,
   MessageContent,
 } from "@/components/ai-elements/message";
-import { AtomLogo } from "@/components/logo";
+
 import {
   type DynamicSearchResult,
 } from "@/app/actions/search";
@@ -2656,9 +2656,7 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
 
                       <Message from="assistant" className="mr-auto sm:mr-0">
                         <div className="flex items-start gap-3 w-full flex-row sm:flex-col sm:gap-0">
-                          <div className="shrink-0 hidden sm:block">
-                            <AtomLogo size={28} className="text-foreground" />
-                          </div>
+                          
                           <div className="w-full pt-1 pl-0">
                             {overallSummaryLines.length > 0 && !shouldShowTabs && (
                               <div className="mb-4">
@@ -2752,9 +2750,6 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                         >
                         {msg.type === "search" && msg.data ? (
                           <div className="flex items-start gap-3 w-full flex-row sm:flex-col sm:gap-0">
-                            <div className="shrink-0 hidden sm:block">
-                              <AtomLogo size={28} className="text-foreground" />
-                            </div>
                             <div className="w-full pt-1 pb-4 md:pb-0 pl-0 sm:pl-0">
                               {msg.planReasoning && (
                                 <div className="mb-3">
@@ -2800,9 +2795,6 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                           <>
                             {msg.role === "assistant" ? (
                               <div className="flex items-start gap-3 w-full flex-row sm:flex-col sm:gap-0">
-                                <div className="shrink-0 hidden sm:block">
-                                  <AtomLogo size={28} className="text-foreground" />
-                                </div>
                               <div className="w-full pt-1 pb-4 md:pb-0 pl-0 sm:pl-0">
                                   {msg.planReasoning && (
                                     <div className="mb-3">
@@ -2936,9 +2928,6 @@ export function SearchConversationShell(props: SearchConversationShellProps) {
                     {isChatLoading && shouldShowTabs && (
                       <Message from="assistant" className="mr-auto">
                         <div className="flex items-start gap-3 w-full flex-row">
-                          <div className="shrink-0">
-                            <AtomLogo size={28} className="text-foreground" />
-                          </div>
                           <div className="w-full pt-1">
                             <MessageContent className="mt-1 text-blue-600 dark:text-blue-400">
                               Searching up…
