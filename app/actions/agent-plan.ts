@@ -371,8 +371,11 @@ export async function planQuerySteps(
                         errorMsg.includes("invalid JSON");
     const isOutputParseError = errorMsg.includes("output_parse_failed") ||
                                errorMsg.includes("Parsing failed");
+    const isToolChoiceRequiredError = errorMsg.includes("Tool choice is required") ||
+                                     errorMsg.includes("tool_use_failed") ||
+                                     errorMsg.includes("did not call a tool");
     
-    if (isToolParseError || isJsonError || isOutputParseError) {
+    if (isToolParseError || isJsonError || isOutputParseError || isToolChoiceRequiredError) {
       console.warn("[planQuerySteps] Tool/JSON/output parse error:", errorMsg.slice(0, 100));
       isRecoverableError = true;
     } else {
