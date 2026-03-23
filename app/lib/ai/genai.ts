@@ -1,5 +1,6 @@
 import { DETECT_INTENT_SYSTEM_PROMPT } from "./system-prompts";
 import { GroqClient, GroqTool } from "./groq/groq-client";
+import { IDENTITY_GUARD } from "./identity";
 
 export async function generateSmallTalkReply(query: string): Promise<string> {
   const client = GroqClient.getInstance();
@@ -10,9 +11,8 @@ export async function generateSmallTalkReply(query: string): Promise<string> {
       systemInstruction: {
         parts: [{
           text:
-            "You are Cloudy, a helpful AI assistant. " +
-            "Respond naturally and warmly to greetings and small talk in 1-2 sentences. " +
-            "Never mention search tools, APIs, or your own capabilities.",
+            IDENTITY_GUARD +
+            "\n\nRespond naturally and warmly to greetings and small talk in 1-2 sentences.",
         }],
       },
     }

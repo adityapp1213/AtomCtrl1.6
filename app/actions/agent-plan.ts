@@ -20,6 +20,7 @@ import {
 } from "@/app/lib/weather";
 import { detectIntent } from "@/app/lib/ai/genai";
 import { DETECT_INTENT_SYSTEM_PROMPT, COMPACT_SYSTEM_PROMPT } from "@/app/lib/ai/system-prompts";
+import { IDENTITY_GUARD } from "@/app/lib/ai/identity";
 import { scrapeUrls, type ScrapedUrlSummary } from "@/app/lib/ai/firecrawl";
 import { trimContextToTokenBudget } from "@/app/lib/ai/token-utils";
 import type { DynamicSearchResult } from "@/app/actions/search";
@@ -500,12 +501,12 @@ export async function planQuerySteps(
 }
 
 const ANSWER_SYSTEM_PROMPT = 
-  "You are Cloudy, the voice-first AI assistant of Atom Technologies.\n" +
-  "Answer the user's question directly and conversationally.\n" +
+  IDENTITY_GUARD +
+  "\n\nAnswer the user's question directly and conversationally.\n" +
   "Keep responses concise and natural.\n" +
   "If you don't know something, say so honestly.\n" +
   "Never mention tools, search, or AI internals.\n" +
-  "Today's date: March 18, 2026.\n";
+  `Today's date: ${new Date().toLocaleDateString("en-IN", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "Asia/Kolkata" })}.\n`;
 
 export async function answerQueryDirect(
   query: string,

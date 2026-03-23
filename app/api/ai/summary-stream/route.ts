@@ -1,4 +1,5 @@
 import { GroqClient } from "@/app/lib/ai/groq/groq-client";
+import { IDENTITY_GUARD } from "@/app/lib/ai/identity";
 
 function buildSourcePayload(payload: any): string {
   const rawItems = Array.isArray(payload?.webItems) ? payload.webItems : [];
@@ -122,7 +123,18 @@ export async function POST(req: Request) {
     return new Response("", { status: 200 });
   }
 
-  const groqStream = GroqClient.getInstance().streamContent("openai/gpt-oss-20b", prompt);
+  const systemPrompt = IDENTITY_GUARD +
+    "\n\nUse only the provided sources.\n" +
+    "Answer the user's question directly and stay tightly on-topic.\n" +
+    "If a specific number/fact is not present in the sources, say that plainly.\n" +
+    "Keep it one paragraph and reasonably concise (about 5–8 sentences).\n" +
+    "Cite sources inline by embedding the full URL from the source directly in the sentence.\n" +
+    "Do not use brackets like [1] or numbered citations.\n" +
+    "Do not add headings, bullets, or special characters.";
+
+  const groqStream = GroqClient.getInstance().streamContent("openai/gpt-oss-20b", prompt, {
+    systemInstruction: { parts: [{ text: systemPrompt }] },
+  });
   return new Response(groqStream as unknown as ReadableStream<Uint8Array>, {
     headers: {
       "Content-Type": "text/plain; charset=utf-8",
